@@ -75,19 +75,38 @@ def test_event_clock_default_and_explicit_zero_are_different_observations(monkey
         "basis": {"producer": "hermes", "field": "MessageEvent.timestamp"},
     }
 
-    claims = {"version": 1, "contributors": [{"locator": {"provider": "platform"},
-        "times": [{"literal": 0, "encoding": "unix_seconds", "meaning": "source_event",
-                   "basis": {"producer": "platform", "field": "event.time"}}]}]}
+    claims = {
+        "version": 1,
+        "contributors": [
+            {
+                "locator": {"provider": "platform"},
+                "times": [
+                    {
+                        "literal": 0,
+                        "encoding": "unix_seconds",
+                        "meaning": "source_event",
+                        "basis": {"producer": "platform", "field": "event.time"},
+                    }
+                ],
+            }
+        ],
+    }
     original = copy.deepcopy(claims)
     marked = event.MessageEvent("marked", origin_statements=claims)
     assert marked.origin_statements["contributors"][0] == original["contributors"][0]
-    assert marked.origin_statements["contributors"][1]["times"][0]["meaning"] == "host_stamp"
+    assert (
+        marked.origin_statements["contributors"][1]["times"][0]["meaning"]
+        == "host_stamp"
+    )
     monkeypatch.setattr("agent.message_metadata.wall_time", lambda: 0)
     row = stamp_message_timestamp({"role": "user", "origin_statements": claims})
     stamp_message_timestamp(row)
     assert row["origin_statements"]["contributors"][0] == original["contributors"][0]
     assert row["origin_statements"]["contributors"][1]["times"][0]["literal"] == 0
-    assert row["origin_statements"]["contributors"][1]["times"][0]["meaning"] == "host_stamp"
+    assert (
+        row["origin_statements"]["contributors"][1]["times"][0]["meaning"]
+        == "host_stamp"
+    )
     assert len(row["origin_statements"]["contributors"]) == 2
     assert claims == original
 

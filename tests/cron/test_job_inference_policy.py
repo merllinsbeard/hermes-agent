@@ -214,6 +214,38 @@ def test_inference_admission_inherits_native_profile_endpoint(monkeypatch):
         reset_secret_scope(token)
 
 
+def test_inference_native_status_is_not_runtime_selection(monkeypatch):
+    from agent import credential_pool
+    from agent.secret_scope import set_secret_scope, reset_secret_scope
+    from hermes_cli import auth, runtime_provider
+
+    config = {"model": {"provider": "openai-codex", "base_url": "https://profile.example.invalid/v1"},
+              "credential_pool_strategies": {"openai-codex": "least_used"}}
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda **kw: config)
+    monkeypatch.setattr(auth, "_load_auth_store", lambda *a, **kw: pytest.fail("unexpected auth-store read"))
+    monkeypatch.setattr(auth, "_load_global_auth_store", lambda *a, **kw: pytest.fail("unexpected root auth-store read"))
+    entries = [credential_pool.PooledCredential.from_dict("openai-codex", {
+        "id": "synthetic-first", "label": "synthetic-first", "priority": 0, "source": "manual",
+        "access_token": "synthetic-first-key", "auth_type": "api_key", "request_count": 10,
+        "base_url": "https://first-pool.example.invalid/v1"}),
+        credential_pool.PooledCredential.from_dict("openai-codex", {
+            "id": "synthetic-second", "label": "synthetic-second", "priority": 1, "source": "manual",
+            "access_token": "synthetic-second-key", "auth_type": "api_key", "request_count": 0,
+            "base_url": "https://second-pool.example.invalid/v1"})]
+    token = set_secret_scope({})
+    try:
+        with runtime_provider.frozen_runtime_config(config):
+            pool = credential_pool.CredentialPool("openai-codex", entries)
+            monkeypatch.setattr(credential_pool, "load_pool", lambda provider: pool)
+            monkeypatch.setattr(runtime_provider, "load_pool", lambda provider: pool)
+            status = auth.get_codex_auth_status()
+            assert status["base_url"] == "https://first-pool.example.invalid/v1"
+            native = runtime_provider.resolve_runtime_provider(requested="openai-codex", target_model="gpt-6.1-sol")
+            assert native["base_url"] == "https://second-pool.example.invalid/v1"
+    finally:
+        reset_secret_scope(token)
+
+
 def make_agent(**changes: Any):
     from run_agent import AIAgent
     options: dict[str, Any] = dict(api_key="synthetic-not-a-credential", base_url=ENDPOINT, provider="openai-codex",

@@ -85,6 +85,18 @@ history that appears to revert.
 
 
 
+## Message origin observations
+
+`messages.origin_statements` is a nullable JSON envelope, separate from presentation
+metadata. Live producers record the original time literal and its basis before
+coercion: a host clock is `host_stamp`, while a supplied timestamp without an
+explicit observation remains `unknown`. An explicit observation can retain
+`source_event`; the message role and transport sender never establish the primary
+author. Existing rows remain NULL. Native copies, host folds, repair and replay
+retain the envelope, including each absorbed contributor. Memory providers receive
+it through the existing redacted transcript handoff; chat-provider requests and
+token estimates exclude it. Presentation updates cannot replace these statements.
+
 ## Codex app-server input ownership
 
 The agent persists an accepted user input before starting its Codex turn. Codex

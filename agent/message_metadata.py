@@ -7,6 +7,7 @@ from time import time as wall_time
 from uuid import uuid4
 from typing import Any, List, Mapping, MutableMapping, Optional, TypeVar
 
+from agent.message_origin import ORIGIN_STATEMENTS, copy_origin, merge_origins, observed_origin
 from agent.conversation_compression_archive import MERGED_DURABLE_ROWS, RETIRED_DURABLE_ROWS, UNNAMED_DURABLE_ROWS
 
 
@@ -44,7 +45,7 @@ PERSISTENCE_ONLY_MESSAGE_FIELDS = frozenset(
     # to sweep underscore keys, but turn_context.py pops this set from every outgoing copy and a strict
     # backend 400s on any key it does not know.
     {"timestamp", "display_kind", "display_metadata", "_row_id", "_submit_row_session_id",
-     MERGED_TURN_PREFIX, MESSAGE_UID, ABSORBED_MESSAGE_UIDS, TOOL_CALL_UIDS, TOOL_CALL_UID,
+     MERGED_TURN_PREFIX, MESSAGE_UID, ABSORBED_MESSAGE_UIDS, TOOL_CALL_UIDS, TOOL_CALL_UID, ORIGIN_STATEMENTS,
      # The alternation repair's row counts: an in-place compaction reads them off the live dict.
      MERGED_DURABLE_ROWS, UNNAMED_DURABLE_ROWS, RETIRED_DURABLE_ROWS}
 ) | REPAIR_BOOKKEEPING_FIELDS
@@ -123,8 +124,11 @@ _IDENTITY_FIELD_TYPES = ((MESSAGE_UID, str), (ABSORBED_MESSAGE_UIDS, list), (TOO
 
 
 def copy_identity_fields(src: Mapping[str, Any], dst: MutableMapping[str, Any]) -> None:
-    """Copy the non-empty identity fields (uid, merge witness, tool-call uids) from *src* onto *dst*: the
-    live dict to its flush row, and the committed row back onto the live dict."""
+    """Copy durable identity fields and origin from *src* to a flush/copy/live dict.
+
+    Origin is independent of presentation metadata; NULL never creates claims.
+    """
+    copy_origin(src, dst)
     for key, kind in _IDENTITY_FIELD_TYPES:
         value = src.get(key)
         if isinstance(value, kind) and value:
@@ -157,6 +161,16 @@ def record_absorbed_message(
     A dict without a uid (unflushed, scaffolding, engine-authored) contributes nothing; an empty result
     leaves the survivor untouched.
     """
+    # A legacy constituent without statements remains an unknown witness, never a
+    # reconstructed source date. Capture it before either dict/uid disappears.
+    origins = []
+    for constituent in (dropped, survivor) if dropped_leads else (survivor, dropped):
+        origin = constituent.get(ORIGIN_STATEMENTS)
+        if origin is None and (uid := message_uid_or_none(constituent)):
+            origin = observed_origin(None, field="message_uid", uid=uid)
+        origins.append(origin)
+    if (origin := merge_origins(*origins)) is not None:
+        survivor[ORIGIN_STATEMENTS] = origin
     survivor_uid = message_uid_or_none(survivor)
     dropped_uid = message_uid_or_none(dropped)
     own = uid_list(survivor.get(ABSORBED_MESSAGE_UIDS))
@@ -283,8 +297,14 @@ def stamp_message_timestamp(
     Gateway adapters can supply the platform event time; all other callers use
     the local wall clock. Returns the same mapping for use at append sites.
     """
+    host_default = message.get("timestamp") is None and timestamp is None
     if message.get("timestamp") is None:
-        message["timestamp"] = wall_time() if timestamp is None else timestamp
+        message["timestamp"] = wall_time() if host_default else timestamp
+    if host_default or message.get(ORIGIN_STATEMENTS) is None:
+        message[ORIGIN_STATEMENTS] = merge_origins(message.get(ORIGIN_STATEMENTS), observed_origin(
+            message["timestamp"], field="stamp_message_timestamp" if host_default else "message.timestamp",
+            meaning="host_stamp" if host_default else "unknown", uid=stamp_message_uid(message),
+        ))
     return message
 
 

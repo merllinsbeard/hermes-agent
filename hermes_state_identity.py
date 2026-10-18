@@ -8,6 +8,7 @@ import json
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Tuple
 
 from agent.message_metadata import ABSORBED_MESSAGE_UIDS, MESSAGE_UID, TOOL_CALL_UID, TOOL_CALL_UIDS, uid_list
+from agent.message_origin import ORIGIN_STATEMENTS, copy_origin
 from agent.message_sanitization import coalesce_tool_call_id
 from hermes_state_common import _json_or
 
@@ -92,6 +93,7 @@ def _restore_row_identity(row: Any, msg: MutableMapping[str, Any]) -> None:
 def _restore_identity_columns(row: Any, msg: MutableMapping[str, Any]) -> None:
     """The stored identity columns onto a restored dict under their live keys (NULL/empty add nothing)."""
     _restore_row_identity(row, msg)
+    copy_origin({ORIGIN_STATEMENTS: row[ORIGIN_STATEMENTS]}, msg)
     if row["absorbed_message_uids"] and (absorbed := _uid_list(row["absorbed_message_uids"])):
         msg[ABSORBED_MESSAGE_UIDS] = absorbed
 

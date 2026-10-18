@@ -30,6 +30,7 @@ class TurnFacadeMixin:
         relay_metadata: Optional[dict[str, Any]] = None,
         title_user_message: Optional[str]=None,
         prelude: Optional[Generator]=None,
+        persist_user_origin_statements: Optional[dict[str, Any]]=None,
     ) -> dict[str, Any]:
         """Forwarder — see ``agent.conversation_loop.run_conversation``."""
         # A review shares this session_id for cache parity: fence review startup or interrupt
@@ -56,6 +57,11 @@ class TurnFacadeMixin:
         from agent.turn_facade_lease import admit_durable_turn_lease, carry_unadmitted_user_message
         from hermes_cli.observability.relay_shared_metrics import finish_task_run, start_task_run
 
+        from agent.message_origin import annotate_turn_origin
+        persist_user_origin_statements = annotate_turn_origin(
+            persist_user_origin_statements, display_kind=persist_user_display_kind,
+            turn_author=turn_author, relay_metadata=relay_metadata,
+        )
         effective_task_id = task_id or str(uuid.uuid4())
         session_id = str(getattr(self, "session_id", None) or "")
         task_context = {
@@ -89,6 +95,7 @@ class TurnFacadeMixin:
                     admission.early_result, user_message, persist_user_message,
                     timestamp=persist_user_timestamp, display_kind=persist_user_display_kind,
                     display_metadata=persist_user_display_metadata, platform_id=persist_user_platform_id,
+                    origin_statements=persist_user_origin_statements,
                 )
                 relay_outcome = (
                     "cancelled" if admission.early_result.get("interrupted") else "timed_out"
@@ -149,6 +156,7 @@ class TurnFacadeMixin:
                         self, user_message, system_message, conversation_history, effective_task_id,
                         stream_callback, persist_user_message,
                         persist_user_timestamp=persist_user_timestamp,
+                        persist_user_origin_statements=persist_user_origin_statements,
                         persist_user_display_kind=persist_user_display_kind,
                         persist_user_display_metadata=persist_user_display_metadata,
                         persist_user_platform_id=persist_user_platform_id, moa_config=moa_config,

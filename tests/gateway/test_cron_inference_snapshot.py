@@ -8,6 +8,7 @@ import pytest
 
 from tests.cron.test_job_inference_policy import POLICY, authored
 from tests.cron.test_job_inference_policy import sandbox
+from tests.cron.test_job_inference_policy import native_binding
 
 
 def test_native_admission_cron_consumer_uses_profile_proxy(tmp_path, monkeypatch, request):
@@ -90,14 +91,15 @@ def test_native_admission_cron_consumer_uses_profile_proxy(tmp_path, monkeypatch
             store._db.close()
 
 
-def test_exact_retry_cold_restore_and_compression_keep_admitted_selection(tmp_path, monkeypatch, request):
+@pytest.mark.parametrize("explicit", [False, True])
+def test_exact_retry_cold_restore_and_compression_keep_admitted_selection(tmp_path, monkeypatch, request, native_binding, explicit):
     scope = request.getfixturevalue("sandbox")
     from cron.jobs import create_job, update_job
     from gateway import run, session_cron
     from gateway.config import GatewayConfig, Platform
     from gateway.session import SessionStore
     from gateway.session_authority import SessionAuthority
-    from gateway.session_contract import Principal
+    from gateway.session_contract import Principal, SessionRef
     from gateway.session_local_recovery import restore_local_session
     from gateway.session_policy import restore_policy
     from hermes_state import SessionDB
@@ -105,10 +107,14 @@ def test_exact_retry_cold_restore_and_compression_keep_admitted_selection(tmp_pa
     from hermes_state_runtime import begin_runtime_epoch, list_session_admissions, RuntimeStoreError
     from agent.job_inference_policy import read_admitted_inference
 
-    job = create_job("Synthetic admission", "every 1h", **authored())
-    config: dict[str, Any] = {"model": {"default": "profile-original"}, "platform_toolsets": {"cli": []}}
-    monkeypatch.setattr(run, "_load_gateway_config", lambda: config)
-    db = SessionDB(tmp_path / "private-state.db")
+    from tests.cron.test_job_inference_policy import ENDPOINT
+    env = native_binding
+    env.install([("original", "synthetic-original", ENDPOINT, 0)])
+    job = create_job("Synthetic admission", "every 1h", **authored(base_url=ENDPOINT if explicit else None), enabled_toolsets=[])
+    config: dict[str, Any] = env.config
+    config["model"]["extra_headers"] = {"X-Synthetic-Context": "synthetic-saved-context"}
+    monkeypatch.setattr(run, "_load_gateway_config", lambda *a: config)
+    db = SessionDB(scope.home / "private-state.db")
     store = SessionStore(tmp_path / "private-sessions", GatewayConfig())
     runner = SimpleNamespace(_draining=False, session_store=store, adapters={})
     authority = SessionAuthority(runner, profile_id=str(scope.home), instance_id="synthetic-owner", db=db,
@@ -122,7 +128,11 @@ def test_exact_retry_cold_restore_and_compression_keep_admitted_selection(tmp_pa
         receipt = await session_cron.operation(authority, "submit", params, actor)
         update_job(job["id"], {"model": "later-model", "inference_policy": ""})
         config["model"]["default"] = "profile-later"
-        assert await session_cron.operation(authority, "submit", params, actor) == receipt
+        config["model"]["base_url"] = "https://later-profile.example.invalid/v1"
+        with monkeypatch.context() as retry:
+            retry.setattr("cron.jobs.get_job", lambda *a: pytest.fail("exact retry read latest authored job"))
+            retry.setattr(run, "_load_gateway_config", lambda *a: pytest.fail("exact retry read current config"))
+            assert await session_cron.operation(authority, "submit", params, actor) == receipt
         with pytest.raises(RuntimeStoreError):
             await session_cron.operation(authority, "submit", {**params, "inference_policy": POLICY}, actor)
         return receipt
@@ -135,6 +145,10 @@ def test_exact_retry_cold_restore_and_compression_keep_admitted_selection(tmp_pa
         pin = read_admitted_inference(json.loads(frozen.request_json)["cron_job"])
         assert pin is not None
         assert (pin.route.model, pin.main_effort, pin.delegation_effort) == ("gpt-6.1-sol", "xhigh", "high")
+        assert pin.route.endpoint == (ENDPOINT if explicit else None)
+        assert frozen.config_secret_ref is not None
+        assert json.loads(frozen.config_json)["model"]["extra_headers"] is None
+        assert env.loads == []
         assert len(list_session_admissions(db, session_id=sid, pending_only=False)) == 1
         authority.sessions.clear()
         runner.adapters.clear()
@@ -148,25 +162,56 @@ def test_exact_retry_cold_restore_and_compression_keep_admitted_selection(tmp_pa
         if store._db is not None and store._db is not db:
             store._db.close()
         store = SessionStore(tmp_path / "private-sessions", GatewayConfig())
-        runner.session_store = store
+        runner = SimpleNamespace(_draining=False, session_store=store, adapters={})
+        authority = SessionAuthority(runner, profile_id=str(scope.home), instance_id="synthetic-restored", db=db,
+            epoch=begin_runtime_epoch(db, instance_id="synthetic-restored"))
+        runner.session_authority = authority
+        monkeypatch.setattr(authority, "_schedule", lambda ref: None)
         restore_local_session(authority, sid)
         after = local_receipt(db, sid)
         assert after["entry"]["session_id"] == "synthetic-tip"
         restored_policy = runner.adapters[Platform.LOCAL].policies[sid]
         assert read_admitted_inference(json.loads(restored_policy.request_json)["cron_job"]) == pin
         assert len(list_session_admissions(db, session_id=sid, pending_only=False)) == 1
-        from tests.cron.test_job_inference_policy import make_agent
-        from tests.agent.test_job_inference_wire import built_request, controlled_client
+        from cron import scheduler
+        from run_agent import AIAgent
+        from hermes_cli import runtime_provider
+        from tests.agent.test_job_inference_wire import built_request
         from agent.codex_runtime import run_codex_stream
-        agent = make_agent(job_inference=read_admitted_inference(json.loads(restored_policy.request_json)["cron_job"]))
-        sent = []
-        try:
-            with controlled_client(sent) as client:
-                run_codex_stream(agent, built_request(agent), client=client)
-            assert (sent[0]["body"]["model"], sent[0]["body"]["reasoning"]["effort"],
-                    sent[0]["body"].get("service_tier")) == ("gpt-6.1-sol", "xhigh", None)
-        finally:
-            agent.close()
+        env.install([("current", "synthetic-current", ENDPOINT, 0)])
+        monkeypatch.setattr(runtime_provider, "resolve_codex_runtime_credentials", lambda: {
+            "api_key": "synthetic-current", "base_url": ENDPOINT})
+        executions = []
+
+        def consume(frozen_job, **kw):
+            executions.append(frozen_job)
+            jc = scheduler._load_cron_job_config(frozen_job, job["id"], job["name"])
+            setup = scheduler._resolve_cron_agent_setup(frozen_job, job["id"], job["name"], jc)
+            agent = scheduler._construct_cron_agent(AIAgent, frozen_job, jc.cfg, setup,
+                workdir=None, session_id=None, session_db=None)
+            try:
+                assert jc.cfg["model"]["base_url"] == "https://proxy.example.invalid/v1"
+                assert jc.cfg["model"]["extra_headers"] == {"X-Synthetic-Context": "synthetic-saved-context"}
+                result = run_codex_stream(agent, built_request(agent), client=agent.client)
+                return True, "synthetic-document", result.output[0].content[0].text, None
+            finally:
+                agent.close()
+
+        monkeypatch.setattr(scheduler, "run_job", consume)
+        from hermes_state_runtime import claim_session_input, settle_session_input
+        row = claim_session_input(db, epoch=authority.epoch, session_id=sid)
+        assert isinstance(row, dict) and row["status"] == "started"
+        result = asyncio.run(session_cron.execute(authority, SessionRef(str(scope.home), sid), row, restored_policy))
+        assert result == "synthetic-ok"
+        settle_session_input(db, epoch=authority.epoch, admission_id=row["admission_id"], generation=row["generation"],
+            outcome="completed", result={"final_response": result})
+        assert asyncio.run(session_cron.operation(authority, "submit", params, actor)) == receipt
+        assert claim_session_input(db, epoch=authority.epoch, session_id=sid) is None
+        assert len(executions) == 1 and local_receipt(db, sid)["policy"]["request_json"] == restored_policy.request_json
+        assert [(r["url"], r["authorization"], r["body"]["model"], r["body"]["reasoning"]["effort"],
+                 r["body"].get("service_tier"), r["headers"].get("x-synthetic-context")) for r in env.sent] == [
+            ((ENDPOINT if explicit else "https://proxy.example.invalid/v1") + "/responses", "Bearer synthetic-current",
+             "gpt-6.1-sol", "xhigh", None, "synthetic-saved-context")]
 
         corrupt = asdict(restored_policy)
         data = json.loads(corrupt["request_json"])

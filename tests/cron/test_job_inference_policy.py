@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -101,6 +102,11 @@ def authored(**changes: Any) -> dict[str, Any]:
             "base_url": ENDPOINT, "inference_policy": dict(POLICY), **changes}
 
 
+def admitted(**changes: Any) -> dict[str, Any]:
+    from agent.job_inference_policy import normalize_admitted_job
+    return normalize_admitted_job(authored(**changes), provider_defaults={})
+
+
 def test_owner_writer_import_and_explicit_clear(sandbox):
     from cron.jobs import create_job, get_job, update_job
     from cron.job_definition import import_job_definitions
@@ -178,6 +184,36 @@ def test_receipt_parser_is_strict_and_detached():
     assert read_admitted_inference({"model": "legacy"}) is None
 
 
+def test_receipt_intent_version_and_pure_decoder(monkeypatch):
+    from agent.job_inference_policy import normalize_admitted_job, read_admitted_inference, JobInferenceError
+    explicit = admitted()
+    omitted = admitted(base_url=None)
+    assert "base_url" not in omitted and explicit["base_url"] == ENDPOINT
+    with pytest.raises(JobInferenceError, match="cannot be authored"):
+        normalize_admitted_job(authored(_inference_intent_version=1), provider_defaults={})
+    for version in (None, True, 0, 2, "1"):
+        with pytest.raises(JobInferenceError, match="ambiguous endpoint intent"):
+            read_admitted_inference({**explicit, "_inference_intent_version": version})
+    with pytest.raises(JobInferenceError, match="ambiguous endpoint intent"):
+        read_admitted_inference(authored())
+    with pytest.raises(JobInferenceError, match="must omit"):
+        read_admitted_inference({**omitted, "base_url": None})
+
+    def forbidden(*a, **kw):
+        pytest.fail("pure decoder consulted runtime/config/auth")
+
+    monkeypatch.setattr("hermes_cli.config.load_config", forbidden)
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", forbidden)
+    monkeypatch.setattr("hermes_cli.runtime_provider.resolve_runtime_provider", forbidden)
+    monkeypatch.setattr("hermes_cli.auth._load_auth_store", forbidden)
+    monkeypatch.setattr("hermes_cli.auth._load_global_auth_store", forbidden)
+    pin = read_admitted_inference(omitted)
+    assert pin is not None
+    assert (pin.route.provider, pin.route.model, pin.route.endpoint, pin.main_effort,
+            pin.descendant().effort) == ("openai-codex", "gpt-6.1-sol", None, "xhigh", "high")
+    assert read_admitted_inference({"model": "legacy"}) is None
+
+
 def test_frozen_named_route_does_not_consult_later_profile(monkeypatch):
     from agent.job_inference_policy import normalize_admitted_job, read_admitted_inference, JobInferenceError
     endpoint = "https://synthetic.example.invalid/v1"
@@ -208,8 +244,9 @@ def test_inference_admission_inherits_native_profile_endpoint(monkeypatch):
         native = runtime_provider.resolve_runtime_provider(requested="openai-codex", target_model="gpt-6.1-sol")
         assert (native["provider"], native["base_url"]) == ("openai-codex", "https://proxy.example.invalid/v1")
         frozen = normalize_admitted_job(authored(base_url=None), provider_defaults=config)
-        assert (frozen["provider"], frozen["model"], frozen["base_url"]) == (
-            "openai-codex", "gpt-6.1-sol", "https://proxy.example.invalid/v1")
+        assert (frozen["provider"], frozen["model"], frozen.get("base_url")) == (
+            "openai-codex", "gpt-6.1-sol", None)
+        assert "base_url" not in frozen and frozen["_inference_intent_version"] == 1
     finally:
         reset_secret_scope(token)
 
@@ -251,12 +288,374 @@ def make_agent(**changes: Any):
     options: dict[str, Any] = dict(api_key="synthetic-not-a-credential", base_url=ENDPOINT, provider="openai-codex",
                    model="gpt-6.1-sol", api_mode="codex_responses", platform="cron", enabled_toolsets=[],
                    skip_context_files=True, skip_memory=True, skip_background_review=True, quiet_mode=True)
-    return AIAgent(**(options | changes))
+    options.update(changes)
+    if options.get("job_inference") is not None and "native_runtime" not in options:
+        options["native_runtime"] = {key: options[key] for key in ("provider", "base_url", "api_mode", "api_key")}
+    return AIAgent(**options)
+
+
+@pytest.fixture
+def native_binding(sandbox, monkeypatch):
+    import httpx
+    from agent import credential_pool
+    from hermes_cli import auth, runtime_provider
+    from agent import process_bootstrap
+    from tests.agent.test_job_inference_wire import response_stream
+
+    config = {"model": {"provider": "openai-codex", "default": "gpt-6.1-sol", "context_length": 128000,
+                        "base_url": "https://proxy.example.invalid/v1"},
+              "agent": {"environment_probe": False, "service_tier": "priority"},
+              "cron": {"preflight": False}, "platform_toolsets": {"cron": []},
+              "credential_pool_strategies": {"openai-codex": "least_used"}}
+    sent, loads, persisted = [], [], []
+    state = SimpleNamespace(response_factory=None)
+    monkeypatch.setattr("hermes_cli.config.load_config_readonly", lambda **kw: config)
+    monkeypatch.setattr(auth, "_load_auth_store", lambda *a, **kw: {})
+    monkeypatch.setattr(auth, "_load_global_auth_store", lambda *a, **kw: {})
+    monkeypatch.setattr(credential_pool, "_load_auth_store", lambda *a, **kw: {})
+    monkeypatch.setattr(credential_pool, "read_credential_pool", lambda *a: list(persisted))
+
+    def persist(provider, rows, **kw):
+        persisted[:] = rows
+        return rows
+
+    monkeypatch.setattr(credential_pool, "persist_pool_entries", persist)
+
+    @contextmanager
+    def metadata(url, **kw):
+        yield httpx.Response(200, request=httpx.Request("GET", url), json={"data": [
+            {"id": "gpt-6.1-sol", "context_length": 128000}]})
+
+    monkeypatch.setattr("agent.model_metadata_http.stream", metadata)
+    monkeypatch.setattr("agent.models_dev._fetch_models_dev_from_network", lambda **kw: ({"synthetic": {"models": {}}}, ""))
+
+    def outgoing(http_request):
+        content = http_request.content
+        if http_request.headers.get("content-encoding") == "zstd":
+            from compression import zstd
+            content = zstd.decompress(content)
+        sent.append({"url": str(http_request.url), "authorization": http_request.headers.get("authorization"),
+                     "body": json.loads(content), "headers": dict(http_request.headers)})
+        event = state.response_factory(sent[-1]["body"]) if state.response_factory is not None else None
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=response_stream(event))
+
+    monkeypatch.setattr(process_bootstrap, "_get_shared_transport", lambda *a: httpx.MockTransport(outgoing))
+    monkeypatch.setattr("cron.scheduler._init_cron_mcp_tools", lambda *a: None)
+    monkeypatch.setattr(credential_pool, "load_pool", lambda *a: pytest.fail("independent pool reload"))
+
+    def install(rows, provider="openai-codex"):
+        pool = credential_pool.CredentialPool(provider, [
+            credential_pool.PooledCredential.from_dict(provider, {
+                "id": label, "label": label, "priority": index, "source": "manual", "auth_type": "api_key",
+                "access_token": key, "base_url": url, "request_count": count})
+            for index, (label, key, url, count) in enumerate(rows)])
+
+        def load(provider):
+            loads.append(provider)
+            return pool
+
+        monkeypatch.setattr(runtime_provider, "load_pool", load)
+        return pool
+
+    return SimpleNamespace(config=config, sent=sent, install=install, loads=loads, persisted=persisted, state=state)
+
+
+def construct_native(job, config):
+    from agent.job_inference_policy import normalize_admitted_job
+    from cron import scheduler
+    from run_agent import AIAgent
+    admitted_job = normalize_admitted_job({"enabled_toolsets": [], **job}, provider_defaults=config)
+    jc = scheduler._load_cron_job_config(admitted_job, "synthetic", "Synthetic native binding")
+    setup = scheduler._resolve_cron_agent_setup(admitted_job, "synthetic", "Synthetic native binding", jc)
+    return scheduler._construct_cron_agent(AIAgent, admitted_job, jc.cfg, setup,
+        workdir=None, session_id=None, session_db=None), admitted_job
+
+
+def test_native_tool_search_assembly_and_dispatch_before_first_send(native_binding, sandbox):
+    import model_tools
+    import tools.memory_tool  # noqa: F401
+    from tools.registry import registry
+    from tools.tool_search import BRIDGE_TOOL_NAMES
+    from hermes_cli.runtime_provider import frozen_runtime_config
+    from agent.codex_runtime import run_codex_stream
+    from tests.agent.test_job_inference_wire import built_request
+    env = native_binding
+    env.install([("A", "synthetic-A", ENDPOINT, 0)])
+    env.config["tools"] = {"tool_search": {"enabled": "on"}}
+    (sandbox.home / "config.yaml").write_text(json.dumps({**env.config, "tools": {"tool_search": {"enabled": "off"}}}))
+    name, toolset = "mcp_policy_lookup", "mcp-policy-proof"
+    calls = []
+
+    def lookup(args, **kw):
+        calls.append(args)
+        return json.dumps({"found": args["subject"]})
+
+    registry.register(name=name, toolset=toolset, handler=lookup, schema={
+        "name": name, "description": "Look up a synthetic policy subject", "parameters": {
+            "type": "object", "properties": {"subject": {"type": "string"}}, "required": ["subject"]}})
+    enabled = ["memory", toolset]
+    try:
+        with frozen_runtime_config(env.config):
+            agent, _ = construct_native(authored(base_url=None, enabled_toolsets=enabled), env.config)
+            try:
+                names = {td["function"]["name"] for td in agent.tools}
+                assert env.sent == []
+                assert BRIDGE_TOOL_NAMES | {"memory"} <= names
+                assert name not in names
+                found = json.loads(model_tools.handle_function_call("tool_search",
+                    {"queries": ["policy subject"]}, enabled_toolsets=enabled))
+                assert name in found["tools"]
+                result = json.loads(model_tools.handle_function_call("tool_call",
+                    {"name": name, "arguments": {"subject": "synthetic"}}, enabled_toolsets=enabled))
+                assert result == {"found": "synthetic"} and calls == [{"subject": "synthetic"}]
+                assert env.sent == [] and env.loads == ["openai-codex"]
+                run_codex_stream(agent, built_request(agent), client=agent.client)
+                wire_names = {td["name"] for td in env.sent[0]["body"]["tools"]}
+                assert {"hermes_tool_search", "tool_describe", "tool_call", "memory"} <= wire_names
+                assert "tool_search" not in wire_names
+                assert name not in wire_names
+                assert (env.sent[0]["url"], env.sent[0]["authorization"]) == (
+                    "https://proxy.example.invalid/v1/responses", "Bearer synthetic-A")
+            finally:
+                agent.close()
+    finally:
+        registry.deregister(name)
+
+
+@pytest.mark.parametrize("case,expected_url,expected_key", [
+    ("profile", "https://proxy.example.invalid/v1", "synthetic-A"),
+    ("mismatch", ENDPOINT, "synthetic-A"),
+    ("least_used", "https://second.example.invalid/v1", "synthetic-B"),
+    ("scoped_env", "https://env.example.invalid/v1", "synthetic-B"),
+    ("explicit", ENDPOINT + "/authored", "synthetic-explicit"),
+    ("alias", "https://proxy.example.invalid/v1", "synthetic-A"),
+])
+def test_native_binding_precedence_on_physical_request(native_binding, monkeypatch, case, expected_url, expected_key):
+    from hermes_cli import runtime_provider
+    from agent.secret_scope import set_secret_scope, reset_secret_scope
+    from agent.codex_runtime import run_codex_stream
+    from tests.agent.test_job_inference_wire import built_request
+    env = native_binding
+    rows = [("A", "synthetic-A", ENDPOINT, 0)]
+    if case in {"least_used", "scoped_env"}:
+        rows = [("A", "synthetic-A", ENDPOINT, 10),
+                ("B", "synthetic-B", "https://second.example.invalid/v1", 0)]
+    pool = env.install(rows)
+    if case == "mismatch":
+        env.config["model"]["provider"] = "openrouter"
+    if case == "explicit":
+        monkeypatch.setattr(runtime_provider, "resolve_codex_runtime_credentials", lambda: {
+            "api_key": "synthetic-explicit", "base_url": "https://credential.example.invalid/v1"})
+    token = set_secret_scope({"HERMES_CODEX_BASE_URL": "https://env.example.invalid/v1"} if case == "scoped_env" else {})
+    try:
+        with runtime_provider.frozen_runtime_config(env.config):
+            agent, job = construct_native(authored(base_url=expected_url if case == "explicit" else None,
+                provider="chatgpt-codex" if case == "alias" else "openai-codex"), env.config)
+            try:
+                client = agent._create_request_openai_client(reason="synthetic-rebuild")
+                run_codex_stream(agent, built_request(agent), client=client)
+                assert [(r["url"], r["authorization"]) for r in env.sent] == [
+                    (expected_url + "/responses", "Bearer " + expected_key)]
+                assert (env.sent[0]["body"]["model"], env.sent[0]["body"]["reasoning"]["effort"],
+                        env.sent[0]["body"].get("service_tier")) == ("gpt-6.1-sol", "xhigh", None)
+                assert job.get("base_url") == (expected_url if case == "explicit" else None)
+                assert env.loads == ([] if case == "explicit" else ["openai-codex"])
+                assert agent._credential_pool is (None if case == "explicit" else pool)
+                if case in {"least_used", "scoped_env"}:
+                    assert agent._credential_pool_entry_id == "B"
+                    assert {e.id: e.request_count for e in pool.entries()} == {"A": 10, "B": 1}
+            finally:
+                agent.close()
+    finally:
+        reset_secret_scope(token)
+
+
+@pytest.mark.parametrize("mode", ["codex_responses", "chat_completions", "codex_app_server"])
+def test_native_named_provider_qualified_transport(native_binding, mode):
+    from hermes_cli.runtime_provider import frozen_runtime_config
+    from agent.job_inference_policy import JobInferenceError
+    from agent.codex_runtime import run_codex_stream
+    from tests.agent.test_job_inference_wire import built_request
+    env = native_binding
+    env.install([])
+    endpoint = "https://named.example.invalid/v1"
+    env.config["model"].update(provider="custom:synthetic", base_url=endpoint, api_mode=mode)
+    env.config["providers"] = {"synthetic": {"base_url": endpoint, "api_key": "synthetic-named-key", "api_mode": mode}}
+    with frozen_runtime_config(env.config):
+        if mode != "codex_responses":
+            with pytest.raises(JobInferenceError, match="qualified"):
+                construct_native(authored(provider="synthetic", base_url=None), env.config)
+            assert env.sent == []
+            return
+        agent, job = construct_native(authored(provider="synthetic", base_url=None), env.config)
+        try:
+            run_codex_stream(agent, built_request(agent), client=agent.client)
+            assert (job["provider"], job.get("base_url")) == ("custom:synthetic", None)
+            assert (agent.provider, agent.requested_provider) == ("custom", "custom:synthetic")
+            assert [(r["url"], r["authorization"], r["body"]["model"], r["body"]["reasoning"]["effort"])
+                    for r in env.sent] == [(endpoint + "/responses", "Bearer synthetic-named-key", "gpt-6.1-sol", "xhigh")]
+        finally:
+            agent.close()
+
+
+def test_native_scoped_env_is_construction_time_authority(native_binding, monkeypatch):
+    from agent.job_inference_policy import read_admitted_inference
+    from agent.secret_scope import set_secret_scope, reset_secret_scope, set_multiplex_context, reset_multiplex_context
+    from hermes_cli.runtime_provider import frozen_runtime_config, resolve_runtime_provider
+    from agent.codex_runtime import run_codex_stream
+    from tests.agent.test_job_inference_wire import built_request
+    env = native_binding
+    env.install([("A", "synthetic-A", ENDPOINT, 0)])
+    monkeypatch.setenv("HERMES_CODEX_BASE_URL", "https://process.example.invalid/v1")
+    job = admitted(base_url=None)
+    pin = read_admitted_inference(job)
+    assert pin is not None and pin.route.endpoint is None
+    with frozen_runtime_config(env.config):
+        token = set_secret_scope({})
+        try:
+            single = resolve_runtime_provider(requested="openai-codex", target_model="gpt-6.1-sol")
+            assert single["base_url"] == "https://process.example.invalid/v1"
+            multiplex = set_multiplex_context(True)
+            try:
+                isolated = resolve_runtime_provider(requested="openai-codex", target_model="gpt-6.1-sol")
+                assert isolated["base_url"] == "https://proxy.example.invalid/v1"
+            finally:
+                reset_multiplex_context(multiplex)
+        finally:
+            reset_secret_scope(token)
+        for url in ("https://first-env.example.invalid/v1", "https://later-env.example.invalid/v1"):
+            token = set_secret_scope({"HERMES_CODEX_BASE_URL": url})
+            try:
+                agent = make_agent(job_inference=pin, native_runtime=resolve_runtime_provider(
+                    requested=pin.route.provider, target_model=pin.route.model))
+                try:
+                    run_codex_stream(agent, built_request(agent), client=agent.client)
+                finally:
+                    agent.close()
+            finally:
+                reset_secret_scope(token)
+    assert [(r["url"], r["authorization"]) for r in env.sent] == [
+        ("https://first-env.example.invalid/v1/responses", "Bearer synthetic-A"),
+        ("https://later-env.example.invalid/v1/responses", "Bearer synthetic-A")]
+    assert read_admitted_inference(job) == pin and "base_url" not in job
+
+
+def test_native_pool_refresh_rotation_and_rebuild_keep_coherent_material(native_binding, monkeypatch):
+    import base64
+    import time
+    from dataclasses import replace
+    from hermes_cli import auth
+    from hermes_cli.runtime_provider import frozen_runtime_config
+    from agent.codex_runtime import run_codex_stream
+    from tests.agent.test_job_inference_wire import built_request
+    env = native_binding
+    pool = env.install([("A", "synthetic-A", ENDPOINT, 0),
+                        ("B", "synthetic-B", "https://second.example.invalid/v1", 10)])
+    claims = base64.urlsafe_b64encode(json.dumps({"exp": time.time() + 3600}).encode()).decode().rstrip("=")
+    token = "synthetic." + claims + ".signature"
+    first = pool.entries()[0]
+    pool._replace_entry(first, replace(first, auth_type="oauth", access_token=token, refresh_token="synthetic-refresh"))
+    monkeypatch.setattr(auth, "refresh_codex_oauth_pure", lambda access, refresh: {
+        "access_token": "synthetic-refreshed", "refresh_token": "synthetic-rotated-refresh"})
+    with frozen_runtime_config(env.config):
+        agent, job = construct_native(authored(base_url=None), env.config)
+        try:
+            refreshed = pool.try_refresh_matching(credential_id="A", api_key_hint=token)
+            assert refreshed is not None and refreshed.access_token == "synthetic-refreshed"
+            assert agent._swap_credential(refreshed)
+            run_codex_stream(agent, built_request(agent), client=agent.client)
+            assert agent._swap_credential(pool.entries()[1])
+            client = agent._create_request_openai_client(reason="synthetic-post-rotation")
+            run_codex_stream(agent, built_request(agent), client=client)
+            assert [(r["url"], r["authorization"]) for r in env.sent] == [
+                ("https://proxy.example.invalid/v1/responses", "Bearer synthetic-refreshed"),
+                ("https://second.example.invalid/v1/responses", "Bearer synthetic-B")]
+            assert agent._credential_pool is pool and agent._credential_pool_entry_id == "B"
+            assert {r["id"] for r in env.persisted} == {"A", "B"}
+            assert next(r for r in env.persisted if r["id"] == "A")["refresh_token"] == "synthetic-rotated-refresh"
+            assert job.get("base_url") is None
+        finally:
+            agent.close()
+
+
+@pytest.mark.parametrize("case", ["implicit", "explicit_same", "explicit_refuse"])
+def test_native_singleton_refresh_preserves_ownership_and_explicit_url(native_binding, monkeypatch, case):
+    from hermes_cli import auth, runtime_provider
+    from agent.codex_runtime import run_codex_stream
+    from tests.agent.test_job_inference_wire import built_request
+    env = native_binding
+    env.install([("A", "synthetic-A", ENDPOINT, 0)])
+    explicit = ENDPOINT + "/authored" if case.startswith("explicit") else None
+    monkeypatch.setattr(runtime_provider, "resolve_codex_runtime_credentials", lambda: {
+        "api_key": "synthetic-A", "base_url": ENDPOINT})
+    with runtime_provider.frozen_runtime_config(env.config):
+        agent, job = construct_native(authored(base_url=explicit), env.config)
+        try:
+            old_url = agent.base_url
+            reads = []
+
+            def foreign(**kw):
+                reads.append(kw)
+                return {"api_key": "synthetic-foreign", "base_url": old_url}
+
+            monkeypatch.setattr(auth, "resolve_codex_runtime_credentials", foreign)
+            assert agent._try_refresh_codex_client_credentials() is False
+            assert reads == [{"refresh_if_expiring": False}]
+            next_url = explicit if case == "explicit_same" else "https://refreshed.example.invalid/v1"
+
+            def refresh(**kw):
+                return {"api_key": "synthetic-A", "base_url": old_url} if "refresh_if_expiring" in kw else {
+                    "api_key": "synthetic-refreshed", "base_url": next_url}
+
+            monkeypatch.setattr(auth, "resolve_codex_runtime_credentials", refresh)
+            assert agent._try_refresh_codex_client_credentials() is (case != "explicit_refuse")
+            run_codex_stream(agent, built_request(agent), client=agent.client)
+            assert [(r["url"], r["authorization"], r["body"]["reasoning"]["effort"]) for r in env.sent] == [
+                ((old_url if case == "explicit_refuse" else next_url) + "/responses",
+                 "Bearer synthetic-A" if case == "explicit_refuse" else "Bearer synthetic-refreshed", "xhigh")]
+            assert job.get("base_url") == explicit
+        finally:
+            agent.close()
+
+
+@pytest.mark.parametrize("field", ["api_key", "base_url", "headers", "physical_headers", "physical_body"])
+def test_native_client_overrides_cannot_break_binding(native_binding, field):
+    from hermes_cli.runtime_provider import frozen_runtime_config
+    from agent.codex_runtime import run_codex_stream
+    from tests.agent.test_job_inference_wire import built_request
+    env = native_binding
+    env.install([("A", "synthetic-A", ENDPOINT, 0)])
+    with frozen_runtime_config(env.config):
+        agent, _ = construct_native(authored(base_url=None), env.config)
+        try:
+            run_codex_stream(agent, built_request(agent), client=agent.client)
+            if field in {"api_key", "base_url"}:
+                agent._client_kwargs[field] = "synthetic-other" if field == "api_key" else "https://other.example.invalid/v1"
+            if field == "headers":
+                agent._client_kwargs["default_headers"] = {"authorization": "Bearer synthetic-other"}
+            client = agent._create_request_openai_client(reason="synthetic-header-rebuild")
+            if field.startswith("physical_"):
+                def mutate(request):
+                    if field == "physical_headers":
+                        request.headers["authorization"] = "Bearer synthetic-other"
+                    else:
+                        body = json.loads(request.content)
+                        body["model"] = "synthetic-other"
+                        request._content = json.dumps(body).encode()
+
+                hooks = client._client.event_hooks
+                client._client.event_hooks = {**hooks, "request": [mutate, *hooks["request"]]}
+            with pytest.raises(Exception):
+                run_codex_stream(agent, built_request(agent), client=client)
+            assert [(r["url"], r["authorization"], r["body"]["model"]) for r in env.sent] == [
+                ("https://proxy.example.invalid/v1/responses", "Bearer synthetic-A", "gpt-6.1-sol")]
+        finally:
+            agent.close()
 
 
 def test_native_constructor_applies_whole_pin_and_refuses_other_transport():
     from agent.job_inference_policy import read_admitted_inference, JobInferenceError
-    pin = read_admitted_inference(authored())
+    pin = read_admitted_inference(admitted())
     agent = make_agent(job_inference=pin)
     try:
         assert (agent.model, agent.provider, agent.reasoning_config, agent.service_tier, agent._fallback_chain) == (
@@ -309,7 +708,7 @@ def test_cron_constructor_and_native_prefill_stay_profile_scoped(sandbox):
     from agent.job_inference_policy import read_admitted_inference
     from agent.codex_runtime import run_codex_stream
     from tests.agent.test_job_inference_wire import built_request, controlled_client
-    job = authored(enabled_toolsets=[])
+    job = admitted(enabled_toolsets=[])
     pin = read_admitted_inference(job)
     (sandbox.home / "synthetic-prefill.json").write_text('[{"role":"user","content":"Synthetic prefill"}]')
     assert _load_prefill_messages({"prefill_messages_file": "synthetic-prefill.json"}, "synthetic", sandbox.home) == [

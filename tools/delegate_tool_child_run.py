@@ -440,6 +440,19 @@ def _lease_child_credential(child: Any) -> tuple[Any, Optional[str]]:
     child_pool = getattr(child, "_credential_pool", None)
     if child_pool is None:
         return None, None
+    if getattr(child, "job_inference", None) is not None:
+        from agent.job_inference_policy import JobInferenceError
+        leased_id = child_pool.acquire_lease()
+        if leased_id is None:
+            raise JobInferenceError("inference_policy has no available native child credential")
+        try:
+            entry = next((e for e in child_pool.entries() if e.id == leased_id), None)
+            if entry is None or not child._swap_credential(entry):
+                raise JobInferenceError("inference_policy cannot adopt the leased native credential")
+        except BaseException:
+            child_pool.release_lease(leased_id)
+            raise
+        return child_pool, leased_id
     from agent.credential_pool import credential_pool_entry_serves_endpoint as _entry_serves_endpoint
     base_url = getattr(child, "base_url", None)
     leased_cred_id = child_pool.acquire_lease()

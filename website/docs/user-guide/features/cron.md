@@ -58,16 +58,26 @@ Both policy fields and all three main selection fields are required. Unknown fie
 and provider `auto` are rejected. Authored job imports accept the same object. The model-facing
 cron tool cannot set this policy or select another inference route.
 
-The admitted run freezes its route and both efforts. Its permitted single, batch, nested, and
-background delegated agents retain that route and the delegation effort. Profile delegation,
+The admitted run freezes its provider, model, both efforts, and optional authored `base_url`.
+Its permitted single, batch, nested, and background delegated agents retain these selections
+and use the delegation effort. Profile delegation,
 fast-mode settings, and fallback models cannot replace the selection. An unsupported effort
 or a conflicting request override fails before the changed request is sent. Exact selection
 currently supports `codex_responses`; an explicit app-server or another transport is refused.
 Compression and other specialized auxiliary services retain their own configuration.
 
+Without a job `base_url`, each construction or credential adoption uses the saved profile
+configuration and current native scoped environment and authentication. The selected key,
+endpoint, transport, and credential pool travel together. An implicit endpoint can change
+with that native selection. An authored URL remains a constraint, including the usual
+credential ownership and origin checks. Middleware and SDK overrides cannot substitute
+another binding or change the selected role fields.
+
 Use `hermes cron edit JOB_ID --inference-policy ''` to clear the policy for future admissions.
 Already admitted runs, including retries and restored sessions, retain their saved selection.
 Jobs without the field keep the usual defaults, clamping, and fallback behavior.
+Older opted-in receipts that synthesized a URL without recording whether it was authored
+are refused. Hermes does not infer their intent from current configuration or migrate them.
 
 ## Admission recovery
 

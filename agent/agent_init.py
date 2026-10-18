@@ -953,6 +953,8 @@ def _apply_openai_header_policy(agent, client_kwargs: dict[str, Any]) -> None:
             apply_custom_provider_tls_to_client_kwargs, get_compatible_custom_providers,
             load_config,
         )
+        if agent.job_inference is not None:
+            from hermes_cli.runtime_provider import load_config
         _cp_entries = get_compatible_custom_providers(load_config())
         _cp_base_url = str(client_kwargs.get("base_url") or agent.base_url or "")
         apply_custom_provider_tls_to_client_kwargs(client_kwargs, _cp_base_url, _cp_entries)
@@ -1092,7 +1094,19 @@ def _load_tools(agent, enabled_toolsets, disabled_toolsets):
     disabled_toolsets = session_disabled_toolsets(disabled_toolsets, getattr(agent, "platform", None))
     agent.disabled_toolsets = disabled_toolsets  # so the tool_search bridge and delegate children drop them too
     agent.tools = model_tools.get_tool_definitions(
-        enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets, quiet_mode=agent.quiet_mode)
+        enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets, quiet_mode=agent.quiet_mode,
+        **({"skip_tool_search_assembly": True} if agent.job_inference is not None else {}))
+    if agent.job_inference is not None:
+        from agent.model_metadata import get_model_context_length
+        from hermes_cli.runtime_provider import load_config
+        from tools.tool_search import ToolSearchConfig, assemble_tool_defs
+        config = load_config()
+        context_length = get_model_context_length(agent.model, provider=agent.provider,
+            base_url=agent.base_url, api_key=agent.api_key,
+            config_context_length=config_context_length_for_runtime(agent, config))
+        tools_config = config.get("tools")
+        search_config = ToolSearchConfig.from_raw(tools_config.get("tool_search") if isinstance(tools_config, dict) else None)
+        agent.tools = assemble_tool_defs(agent.tools, context_length=context_length, config=search_config).tool_defs
     # A finite -q run has no later session to learn for: no skill authoring tool (agent/oneshot_footprint.py).
     from agent.oneshot_footprint import prune_oneshot_tools
     agent.tools = prune_oneshot_tools(agent.tools or [])
@@ -2261,6 +2275,7 @@ def init_agent(
     side_agent: bool = False, memory_manager=None,
     tool_result_metadata_callback: Optional[Callable[..., dict]] = None,
     job_inference: AgentRolePin | None = None,
+    native_runtime: dict[str, Any] | None = None,
 ):
     from agent.safe_worker_policy import safe_worker_enabled
 
@@ -2270,6 +2285,7 @@ def init_agent(
         prefill_messages = []
         fallback_model = {}
     agent.job_inference = job_inference
+    agent._job_runtime = None
     if job_inference is not None:
         route = job_inference.route
         job_inference.require_route(requested_provider or provider or route.provider,
@@ -2279,7 +2295,17 @@ def init_agent(
         if acp_command or command:
             from agent.job_inference_policy import JobInferenceError
             raise JobInferenceError("inference_policy does not support an external process transport")
-        provider, model, base_url = job_inference.route.provider, job_inference.route.model, job_inference.route.endpoint
+        from agent.job_inference import require_runtime
+        from hermes_cli.runtime_provider import resolve_runtime_provider
+        native_runtime = (dict(native_runtime) if native_runtime is not None else resolve_runtime_provider(
+            requested=route.provider, target_model=route.model, explicit_base_url=route.endpoint))
+        require_runtime(job_inference, native_runtime)
+        agent._job_runtime = native_runtime
+        provider, model, base_url = native_runtime["provider"], route.model, native_runtime["base_url"]
+        requested_provider = native_runtime.get("requested_provider") or route.provider
+        api_key, api_mode = native_runtime["api_key"], native_runtime["api_mode"]
+        credential_pool = native_runtime.get("credential_pool")
+        request_overrides = native_runtime.get("request_overrides") or request_overrides
         reasoning_config, service_tier, fallback_model = job_inference.reasoning_config(), "", []
     _install_safe_stdio()
 
@@ -2321,8 +2347,6 @@ def init_agent(
     agent.acp_args = list(acp_args or args or [])
     _resolve_api_mode(agent, api_mode, provider_name, base_url)
     _finalize_routing(agent, api_mode, credential_pool)
-    from agent.job_inference import require_job_agent
-    require_job_agent(agent)
 
     # Platform callbacks are stored under their parameter names verbatim.
     for _cb in _CALLBACK_PARAMS:
@@ -2349,6 +2373,10 @@ def init_agent(
     _set_defaults(agent, _STREAM_STATE)
     _build_client(agent, api_key, base_url, fallback_model)
     _init_fallback_chain(agent, fallback_model)
+    if job_inference is not None:
+        from agent.job_inference import require_job_agent
+        agent._credential_pool_entry_id = native_runtime.get("credential_pool_entry_id")
+        require_job_agent(agent, agent.client)
     _load_tools(agent, enabled_toolsets, disabled_toolsets)
     _init_session_state(
         agent, session_id, session_db, parent_session_id, reasoning_config, max_tokens,
@@ -2358,6 +2386,8 @@ def init_agent(
     # Load config once for memory, skills, and compression sections
     try:
         from hermes_cli.config import load_config_readonly as _load_agent_config
+        if job_inference is not None:
+            from hermes_cli.runtime_provider import load_config as _load_agent_config
         _agent_cfg = _load_agent_config()
     except Exception:
         _agent_cfg = {}

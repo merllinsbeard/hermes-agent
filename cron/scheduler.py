@@ -1634,9 +1634,11 @@ def _load_cron_job_config(job: dict, job_id: str, job_name: str) -> _CronJobConf
     _model_cfg: Any = {}
     try:
         from hermes_cli.config_effective import load_user_config_effective
+        from hermes_cli.runtime_provider import _FROZEN_RUNTIME_CONFIG, load_config
         _cfg_path = str(_get_hermes_home() / "config.yaml")
-        if os.path.exists(_cfg_path):
-            _cfg = load_user_config_effective(Path(_cfg_path))
+        frozen = _FROZEN_RUNTIME_CONFIG.get() if read_admitted_inference(job) is not None else None
+        if frozen is not None or os.path.exists(_cfg_path):
+            _cfg = load_config() if frozen is not None else load_user_config_effective(Path(_cfg_path))
             # Coerce null to {} so a falsy default never clobbers a resolved env value.
             _model_cfg = _cfg.get("model") or {}
             _cron_cfg_for_model = _cfg.get("cron") or {}
@@ -2459,7 +2461,12 @@ def _resolve_cron_agent_setup(job: dict, job_id: str, job_name: str, jc) -> _Cro
     # Mid-run provider ladder: same rule as resolution above, so a pinned job cannot be swapped
     # onto the global chain by a 5xx/429 either.
     setup.fallback_model = _job_fallback_chain(job, _cfg)
-    setup.credential_pool = _load_credential_pool(setup.runtime, job_id)
+    if setup.job_inference is not None:
+        from agent.job_inference import require_runtime
+        require_runtime(setup.job_inference, setup.runtime)
+        setup.credential_pool = setup.runtime.get("credential_pool")
+    else:
+        setup.credential_pool = _load_credential_pool(setup.runtime, job_id)
     # MCP servers must be registered before AIAgent is constructed.
     _init_cron_mcp_tools(job_id)
     # Only now can a requested MCP toolset be judged: its alias is process-global but its tools live
@@ -2476,6 +2483,7 @@ def _construct_cron_agent(AIAgent, job: dict, _cfg: dict, setup: _CronAgentSetup
     pr = _cfg.get("provider_routing") or {}
     return AIAgent(
         model=setup.model, job_inference=setup.job_inference,
+        native_runtime=runtime if setup.job_inference is not None else None,
         api_key=runtime.get("api_key"),
         base_url=runtime.get("base_url"),
         provider=runtime.get("provider"),

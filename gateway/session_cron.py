@@ -4,6 +4,7 @@ Public callers name a persisted job, never supply agent policy or arbitrary jobs
 The ordinary admission ledger owns execution; the scheduler owns final delivery.
 """
 import asyncio
+from contextlib import ExitStack
 from contextvars import ContextVar
 from dataclasses import asdict, replace
 import json
@@ -245,7 +246,12 @@ async def execute(authority, ref, row, policy):
     token = bind_execution(authority, ref.session_id, job['id'], execution_id)
     try:
         db_path = await asyncio.to_thread(Path(authority.db.db_path).resolve)
-        with _profile_runtime_scope(db_path.parent):
+        with _profile_runtime_scope(db_path.parent), ExitStack() as scope:
+            from agent.job_inference_policy import read_admitted_inference
+            if read_admitted_inference(job) is not None:
+                from hermes_cli.runtime_provider import frozen_runtime_config
+                config, _ = policy.effective(authority)
+                scope.enter_context(frozen_runtime_config(config))
             result = await asyncio.to_thread(_run_identified, run_job, job, execution_id,
                                              extra_prompt=data['extra_prompt'], cancel_event=cancel)
         # run_job stamps run-side verdicts on ITS job copy (quota hold, unreachable model); the

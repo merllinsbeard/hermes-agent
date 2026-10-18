@@ -5,7 +5,7 @@ import httpx
 from openai import OpenAI
 import pytest
 
-from tests.cron.test_job_inference_policy import ENDPOINT, authored, make_agent
+from tests.cron.test_job_inference_policy import ENDPOINT, admitted, make_agent
 from tests.cron.test_job_inference_policy import sandbox
 
 
@@ -44,7 +44,7 @@ def built_request(agent):
 def test_native_main_and_delegate_wire_selection():
     from agent.job_inference_policy import read_admitted_inference
     from agent.codex_runtime import run_codex_stream
-    pin = read_admitted_inference(authored())
+    pin = read_admitted_inference(admitted())
     assert pin is not None
     sent = []
     for role, effort in [(pin, "xhigh"), (pin.descendant(), "high")]:
@@ -70,7 +70,7 @@ def test_native_main_and_delegate_wire_selection():
 def test_final_request_override_refuses_before_send(override):
     from agent.job_inference_policy import read_admitted_inference, JobInferenceError
     from agent.codex_runtime import run_codex_stream
-    agent = make_agent(job_inference=read_admitted_inference(authored()), request_overrides=override)
+    agent = make_agent(job_inference=read_admitted_inference(admitted()), request_overrides=override)
     sent = []
     with controlled_client(sent) as client:
         try:
@@ -88,7 +88,7 @@ def test_native_execution_middleware_cannot_replace_model(request):
     from hermes_cli.middleware import run_llm_execution_middleware
     manager._middleware["llm_execution"] = [
         lambda request, next_call, **kw: next_call({**request, "extra_body": {"model": "middleware-other"}})]
-    agent = make_agent(job_inference=read_admitted_inference(authored()))
+    agent = make_agent(job_inference=read_admitted_inference(admitted()))
     sent = []
     with controlled_client(sent) as client:
         try:
@@ -103,7 +103,7 @@ def test_native_execution_middleware_cannot_replace_model(request):
 def test_actual_runtime_route_is_checked(mutation):
     from agent.job_inference_policy import read_admitted_inference, JobInferenceError
     from agent.codex_runtime import run_codex_stream
-    agent = make_agent(job_inference=read_admitted_inference(authored()))
+    agent = make_agent(job_inference=read_admitted_inference(admitted()))
     request = built_request(agent)
     sent = []
     endpoint = "https://different.example.invalid/v1" if mutation == "endpoint" else ENDPOINT
@@ -123,7 +123,7 @@ def test_actual_runtime_route_is_checked(mutation):
 def test_native_clamp_is_refused_and_legacy_still_clamps():
     from agent.job_inference_policy import read_admitted_inference, JobInferenceError
     from agent.codex_runtime import run_codex_stream
-    opted = make_agent(job_inference=read_admitted_inference(authored(reasoning_effort="ultra")))
+    opted = make_agent(job_inference=read_admitted_inference(admitted(reasoning_effort="ultra")))
     legacy = make_agent(reasoning_config={"enabled": True, "effort": "ultra"})
     sent = []
     with controlled_client(sent) as client:
@@ -147,7 +147,7 @@ def test_physical_stream_retry_checks_the_same_selection():
             raise httpx.ConnectError("synthetic disconnect", request=request)
         data = response_stream()
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=data)
-    agent = make_agent(job_inference=read_admitted_inference(authored()))
+    agent = make_agent(job_inference=read_admitted_inference(admitted()))
     sent = []
     with controlled_client(sent, failure=failure) as client:
         try:
@@ -176,7 +176,7 @@ def test_request_middleware_and_policy_errors_fail_closed(request):
             total_chars=30, retry_count=0, api_call_count=1, api_request_id="synthetic",
             api_start_time=0, effective_task_id=None, turn_id="synthetic-turn")
 
-    agent = make_agent(job_inference=read_admitted_inference(authored()))
+    agent = make_agent(job_inference=read_admitted_inference(admitted()))
     sent = []
     try:
         manager._middleware["llm_request"] = [lambda request, **kw: {"request": {**request, "model": "middleware-other"}}]
@@ -213,7 +213,7 @@ def test_reasoning_recovery_cannot_drop_or_floor_an_opted_effort(monkeypatch):
             "param": "reasoning.effort", "error_code": "invalid_reasoning_effort", "retryable": False}})
     monkeypatch.setattr("hermes_cli.models_reasoning_caps.refresh_reasoning_caps_async", lambda provider: None)
     for opted in (True, False):
-        agent = make_agent(job_inference=read_admitted_inference(authored()) if opted else None,
+        agent = make_agent(job_inference=read_admitted_inference(admitted()) if opted else None,
                            reasoning_config={"enabled": True, "effort": "xhigh"})
         try:
             built_request(agent)
@@ -251,7 +251,7 @@ def test_native_error_turn_never_activates_another_model(monkeypatch, failure_ki
 
     sent = []
     monkeypatch.setattr(AIAgent, "_create_request_openai_client", lambda self, **kw: controlled_client(sent, failure=failure))
-    agent = make_agent(job_inference=read_admitted_inference(authored()), max_iterations=2)
+    agent = make_agent(job_inference=read_admitted_inference(admitted()), max_iterations=2)
     agent._api_max_retries = 1
     agent._auto_recovery_cycles = 0
     agent._fallback_chain = [{"provider": "openrouter", "model": "forbidden-fallback"}]
@@ -271,7 +271,7 @@ def test_late_transport_change_is_refused_at_native_execution_boundary():
     from agent.job_inference_policy import read_admitted_inference, JobInferenceError
     from agent.turn_api_call import perform_api_call
     from agent.turn_retry_state import TurnRetryState
-    agent = make_agent(job_inference=read_admitted_inference(authored()))
+    agent = make_agent(job_inference=read_admitted_inference(admitted()))
     request = built_request(agent)
     agent.api_mode = "codex_app_server"
     try:

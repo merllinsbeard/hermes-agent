@@ -507,7 +507,7 @@ def _resolve_child_runtime(
     pinned provider is actually honoured."""
     pin = getattr(parent_agent, "job_inference", None)
     if pin is not None:
-        pin.require_route(override_provider or parent_agent.provider, model or parent_agent.model,
+        pin.require_route(override_provider or parent_agent.requested_provider, model or parent_agent.model,
                           override_base_url or parent_agent.base_url)
         pin.require_transport(override_api_mode or parent_agent.api_mode)
     effective_model = model or parent_agent.model
@@ -615,6 +615,7 @@ def _resolve_child_runtime(
         child = pin.descendant()
         kwargs.update(job_inference=child, model=child.route.model, provider=child.route.provider,
                       requested_provider=child.route.provider, base_url=child.route.endpoint,
+                      native_runtime=dict(parent_agent._job_runtime),
                       reasoning_config=child.reasoning_config(), service_tier="", fallback_model=[])
     child_max_tokens = getattr(parent_agent, "max_tokens", None)
     if isinstance(child_max_tokens, int):

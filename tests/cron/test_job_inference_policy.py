@@ -47,8 +47,11 @@ def sandbox(tmp_path, monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", refuse)
     monkeypatch.setattr(socket.socket, "connect_ex", refuse)
+    monkeypatch.setattr(socket.socket, "sendto", refuse)
     monkeypatch.setattr(socket, "create_connection", refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
     monkeypatch.setattr(subprocess, "Popen", refuse)
+    monkeypatch.setattr("openai._base_client.platform_headers", lambda *a, **k: {"X-Stainless-Lang": "python"})
     import hermes_cli.venv_sync as sync
     import hermes_cli._early_recovery as recovery
     from pm import environments

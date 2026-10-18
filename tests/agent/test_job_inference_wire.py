@@ -228,7 +228,7 @@ def test_reasoning_recovery_cannot_drop_or_floor_an_opted_effort(monkeypatch):
             else:
                 assert recover_after_classification(agent, error, classified, retry, status_code=400,
                     error_context={}, messages=[], api_messages=[])[0] is True
-                assert built_request(agent).get("reasoning", {}).get("effort") is None
+                assert built_request(agent)["reasoning"]["effort"] == "medium"
         finally:
             agent.close()
 

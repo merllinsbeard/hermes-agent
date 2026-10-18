@@ -390,6 +390,11 @@ class GatewayTurnPersistenceMixin:
             ),
             "timestamp": prepared.persist_user_timestamp if prepared.persist_user_timestamp is not None else ts,
         }
+        from agent.message_origin import annotate_turn_origin
+        origin = annotate_turn_origin(getattr(event, "origin_statements", None),
+                                      display_kind=prepared.persist_user_display_kind)
+        if origin is not None:
+            _user_entry["origin_statements"] = origin
         if prepared.persist_user_display_kind:
             _user_entry["display_kind"] = prepared.persist_user_display_kind
         from gateway.response_filters import display_metadata_for_event

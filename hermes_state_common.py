@@ -499,6 +499,7 @@ CREATE TABLE IF NOT EXISTS messages (
     api_content TEXT,
     display_kind TEXT,
     display_metadata TEXT,
+    origin_statements TEXT,
     display_identity BLOB,
     display_order INTEGER,
     message_uid TEXT,

@@ -10,6 +10,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from agent.message_origin import observed_origin
 from gateway.session import SessionSource
 
 # Desktop attachment reference tags prepended by buildContextText before the
@@ -93,7 +94,7 @@ class MessageEvent:
     internal: bool = False
     # Free-form per-event metadata (e.g. ``whatsapp_from_owner=True``); plugins must ``.get()``.
     metadata: dict[str, Any] = field(default_factory=dict)
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: datetime | float | str | None = None
     # May this event resolve gateway commands / control prompts? Proactive plugin events set False
     # so untrusted payload text stays conversational. New fields append after it (positional compat).
     allow_gateway_control: bool = True
@@ -108,10 +109,25 @@ class MessageEvent:
     # ``reply_expected`` for positional compat (see the field-order rule above).
     inherit_channel_pin: bool = False
 
+    # Producer observations have their own persistence field; display metadata does not own them.
+    origin_statements: Optional[dict[str, Any]] = None
+
     # Process-local admission receipt, never routing metadata or execution acknowledgement.
     _gateway_accepted: bool = field(default=False, init=False, repr=False, compare=False)
     # Run-owned final presentation snapshot; never deserialized from ingress metadata.
     _notification_reply_muted: Optional[bool] = field(default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        host_default = self.timestamp is None
+        if host_default:
+            self.timestamp = datetime.now()
+        if self.origin_statements is None:
+            platform = getattr(getattr(self.source, "platform", None), "value", None)
+            self.origin_statements = observed_origin(
+                self.timestamp, field="MessageEvent.timestamp.default" if host_default else "MessageEvent.timestamp",
+                meaning="host_stamp" if host_default else "unknown",
+                source_id=str(self.message_id) if self.message_id is not None else None, source_scope=platform,
+            )
 
     def absorb_reply_expected(self, other: "MessageEvent") -> None:
         """One turn now answers *other* too: an addressed message wins, then an unknown one."""

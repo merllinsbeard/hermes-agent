@@ -426,13 +426,17 @@ class SessionPersistenceMixin:
         override = getattr(self, "_persist_user_message_override", None)
         timestamp = getattr(self, "_persist_user_message_timestamp", None)
         platform_id = getattr(self, "_persist_user_message_platform_id", None)
-        if idx is None or (override is None and timestamp is None and platform_id is None):
+        origin = getattr(self, "_persist_user_origin_statements", None)
+        if idx is None or (override is None and timestamp is None and platform_id is None and origin is None):
             return
         msg = messages[idx] if 0 <= idx < len(messages) else None
         if not (isinstance(msg, dict) and msg.get("role") == "user"):
             return
         if _override_replaces_content(msg, msg.get("content"), override):
             msg["content"] = _content_with_turn_override(msg, msg.get("content"), override)
+        if origin is not None:
+            from agent.message_origin import origin_copy
+            msg["origin_statements"] = origin_copy(origin)
         if timestamp is not None:
             msg["timestamp"] = timestamp
         if platform_id is not None:  # load-bearing for restart drain-window recovery dedup (has_platform_message_id)

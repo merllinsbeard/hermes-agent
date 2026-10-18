@@ -958,6 +958,8 @@ class TurnRunner(GatewayTurnProgressMixin, GatewaySessionAgentMixin):
                 kwargs["persist_user_display_metadata"] = ctx.persist_user_display_metadata
             if ctx.moa_config is not None:
                 kwargs["moa_config"] = ctx.moa_config
+            if ctx.persist_user_origin_statements is not None:
+                kwargs["persist_user_origin_statements"] = ctx.persist_user_origin_statements
             if persist_user_timestamp_override is not None:
                 kwargs["persist_user_timestamp"] = persist_user_timestamp_override
             # The RAW inbound id (not event_message_id, the reply anchor) rides the persisted user

@@ -573,6 +573,7 @@ def _refresh_mcp_tools_between_turns(agent: Any) -> None:
 def _bind_turn_identity(
     agent: Any, task_id: Optional[str], stream_callback, persist_user_message: Any,
     persist_user_timestamp: Optional[float], persist_user_platform_id: Optional[str],
+    persist_user_origin_statements: Optional[dict[str, Any]] = None,
 ) -> tuple[str, str]:
     """Stage callback/persist overrides on the agent and bind this turn's task and turn
     ids. Returns ``(effective_task_id, turn_id)``."""
@@ -580,6 +581,7 @@ def _bind_turn_identity(
     agent._persist_user_message_idx = None
     agent._persist_user_message_override = persist_user_message
     agent._persist_user_message_timestamp = persist_user_timestamp
+    agent._persist_user_origin_statements = persist_user_origin_statements
     agent._persist_user_message_platform_id = persist_user_platform_id
     # Unique task_id when not provided isolates VMs between tasks.
     effective_task_id = task_id or str(uuid.uuid4())
@@ -671,6 +673,7 @@ def _stage_turn_user_message(
     persist_user_timestamp: Optional[float], persist_user_platform_id: Optional[str],
     persist_user_display_kind: Optional[str],
     persist_user_display_metadata: Optional[dict[str, Any]],
+    persist_user_origin_statements: Optional[dict[str, Any]] = None,
 ) -> tuple[dict[str, Any], Any]:
     """Build this turn's user dict, reusing CLI-staged input only when its clean text
     matches this turn (a stale handoff must not replace later input; voice turns
@@ -693,7 +696,15 @@ def _stage_turn_user_message(
             agent._pending_cli_user_message = None
     # CLI input is stamped when staged; gateway input may carry the platform event
     # time. Preserve either value and cover any legacy unstamped handoff.
+    from agent.message_origin import annotate_turn_origin
+    if persist_user_origin_statements is not None:
+        user_msg["origin_statements"] = persist_user_origin_statements
     stamp_message_timestamp(user_msg, timestamp=persist_user_timestamp)
+    user_msg["origin_statements"] = annotate_turn_origin(
+        user_msg["origin_statements"], display_kind=persist_user_display_kind,
+        turn_author=getattr(agent, "_turn_author", None),
+    )
+    agent._persist_user_origin_statements = user_msg["origin_statements"]
 
     # Synthesized turns stamp their transcript type so the crash persist writes a typed
     # row; the model still receives role/content unchanged (api_messages strips both).
@@ -1043,6 +1054,7 @@ def build_turn_context(
     install_safe_stdio, sanitize_surrogates, summarize_user_message_for_log, set_session_context,
     set_current_write_origin, ra, moa_active: bool=False,
     title_user_message: Optional[str]=None,
+    persist_user_origin_statements: Optional[dict[str, Any]]=None,
 ) -> TurnContext:
     """Run the once-per-turn setup and return the loop's input context.
 
@@ -1087,7 +1099,7 @@ def build_turn_context(
 
     effective_task_id, turn_id = _bind_turn_identity(
         agent, task_id, stream_callback, persist_user_message,
-        persist_user_timestamp, persist_user_platform_id,
+        persist_user_timestamp, persist_user_platform_id, persist_user_origin_statements,
     )
     _reset_per_turn_agent_state(agent)
 
@@ -1113,6 +1125,7 @@ def build_turn_context(
     user_msg, pending_cli_message = _stage_turn_user_message(
         agent, user_message, persist_user_message, persist_user_timestamp,
         persist_user_platform_id, persist_user_display_kind, persist_user_display_metadata,
+        persist_user_origin_statements,
     )
     _hydrate_from_history(agent, conversation_history)
     # Every estimator this turn prices images at the cost learned from this model's real usage.

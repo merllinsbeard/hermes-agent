@@ -407,7 +407,7 @@ def admit_durable_turn_lease(
 def carry_unadmitted_user_message(
     early_result: dict[str, Any], user_message: Any, persist_user_message: Any, *,
     timestamp: Optional[float], display_kind: Optional[str], display_metadata: Optional[dict[str, Any]],
-    platform_id: Optional[str],
+    platform_id: Optional[str], origin_statements: Optional[dict[str, Any]] = None,
 ) -> None:
     """A follow-up that interrupted the lease wait must not consume the accepted input: append it to
     the early result's history so the follow-up turn sees it and persists it (the flush honours
@@ -435,7 +435,14 @@ def carry_unadmitted_user_message(
         deferred_user["display_metadata"] = display_metadata
     if platform_id is not None:
         deferred_user["platform_message_id"] = platform_id
+    if origin_statements is not None:
+        from agent.message_origin import origin_copy
+        deferred_user["origin_statements"] = origin_copy(origin_statements)
     append_message(early_result["messages"], deferred_user, timestamp=timestamp)
+    from agent.message_origin import annotate_turn_origin
+    deferred_user["origin_statements"] = annotate_turn_origin(
+        deferred_user["origin_statements"], display_kind=display_kind,
+    )
 
 
 def _lease_not_acquired_result(agent, session_id: str, conversation_history, *, waited: bool) -> dict[str, Any]:

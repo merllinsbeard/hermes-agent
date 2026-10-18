@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import traceback
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -95,7 +96,7 @@ def sandbox(tmp_path, monkeypatch):
     assert unhandled == [], "\n".join(unhandled)
 
 
-def authored(**changes):
+def authored(**changes: Any) -> dict[str, Any]:
     return {"model": "gpt-6.1-sol", "provider": "openai-codex", "reasoning_effort": "xhigh",
             "base_url": ENDPOINT, "inference_policy": dict(POLICY), **changes}
 
@@ -104,14 +105,18 @@ def test_owner_writer_import_and_explicit_clear(sandbox):
     from cron.jobs import create_job, get_job, update_job
     from cron.job_definition import import_job_definitions
     job = create_job("Synthetic check", "every 1h", **authored())
-    assert get_job(job["id"])["inference_policy"] == POLICY
+    saved = get_job(job["id"])
+    assert saved is not None and saved["inference_policy"] == POLICY
     edited = update_job(job["id"], {"prompt": "Updated synthetic check"})
+    assert edited is not None
     assert edited["reasoning_effort"] == "xhigh"
     assert edited["inference_policy"] == POLICY
     replacement = {**job, "inference_policy": {**POLICY, "delegation_reasoning_effort": "medium"}}
     import_job_definitions({job["id"]: replacement}, paused_reason="synthetic import")
-    assert get_job(job["id"])["inference_policy"]["delegation_reasoning_effort"] == "medium"
+    imported = get_job(job["id"])
+    assert imported is not None and imported["inference_policy"]["delegation_reasoning_effort"] == "medium"
     cleared = update_job(job["id"], {"inference_policy": ""})
+    assert cleared is not None
     assert "inference_policy" not in cleared
     legacy = create_job("Legacy check", "every 1h")
     assert legacy["provider"] is None
@@ -136,7 +141,8 @@ def test_invalid_edit_is_atomic():
     job = create_job("Atomic check", "every 1h", **authored())
     with pytest.raises(ValueError):
         update_job(job["id"], {"provider": "", "prompt": "must not be saved"})
-    assert get_job(job["id"])["prompt"] == "Atomic check"
+    saved = get_job(job["id"])
+    assert saved is not None and saved["prompt"] == "Atomic check"
 
 
 def test_cli_parser_roundtrip_and_null_refusal():
@@ -160,6 +166,7 @@ def test_receipt_parser_is_strict_and_detached():
     job = authored(provider="OPENAI-CODEX", model="openai/gpt-6.1-sol", base_url=ENDPOINT.upper() + "/")
     frozen = normalize_admitted_job(job, provider_defaults={})
     pin = read_admitted_inference(frozen)
+    assert pin is not None
     assert (pin.route.provider, pin.route.model, pin.route.endpoint, pin.effort, pin.descendant().effort) == (
         "openai-codex", "gpt-6.1-sol", "https://chatgpt.com/BACKEND-API/CODEX", "xhigh", "high")
     job["inference_policy"]["delegation_reasoning_effort"] = "low"
@@ -178,6 +185,7 @@ def test_frozen_named_route_does_not_consult_later_profile(monkeypatch):
         "providers": {"synthetic": {"base_url": endpoint, "models": ["gpt-6.1-sol"]}}})
     monkeypatch.setattr("hermes_cli.config.load_config", lambda **kw: pytest.fail("frozen route read current profile"))
     pin = read_admitted_inference(frozen)
+    assert pin is not None
     assert (pin.route.provider, pin.route.model, pin.route.endpoint) == ("custom:synthetic", "gpt-6.1-sol", endpoint)
     pin.require_route("custom:synthetic", "gpt-6.1-sol", endpoint + "/")
     for provider in ("auto", "custom", "openai-codex"):
@@ -185,9 +193,9 @@ def test_frozen_named_route_does_not_consult_later_profile(monkeypatch):
             pin.require_route(provider, "gpt-6.1-sol", endpoint)
 
 
-def make_agent(**changes):
+def make_agent(**changes: Any):
     from run_agent import AIAgent
-    options = dict(api_key="synthetic-not-a-credential", base_url=ENDPOINT, provider="openai-codex",
+    options: dict[str, Any] = dict(api_key="synthetic-not-a-credential", base_url=ENDPOINT, provider="openai-codex",
                    model="gpt-6.1-sol", api_mode="codex_responses", platform="cron", enabled_toolsets=[],
                    skip_context_files=True, skip_memory=True, skip_background_review=True, quiet_mode=True)
     return AIAgent(**(options | changes))

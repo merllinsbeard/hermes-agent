@@ -1,4 +1,5 @@
 import json
+from typing import Any
 
 import httpx
 from openai import OpenAI
@@ -8,7 +9,7 @@ from tests.cron.test_job_inference_policy import ENDPOINT, authored, make_agent
 from tests.cron.test_job_inference_policy import sandbox
 
 
-def response_event():
+def response_event() -> dict[str, Any]:
     return {"type": "response.completed", "response": {
         "id": "synthetic-response", "model": "gpt-6.1-sol", "status": "completed",
         "output": [{"id": "synthetic-message", "type": "message", "role": "assistant",
@@ -16,7 +17,7 @@ def response_event():
         "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3}}}
 
 
-def response_stream(event=None):
+def response_stream(event: dict[str, Any] | None = None):
     event = event or response_event()
     items = [{"type": "response.output_item.done", "output_index": index, "item": item}
              for index, item in enumerate(event["response"]["output"])]
@@ -44,6 +45,7 @@ def test_native_main_and_delegate_wire_selection():
     from agent.job_inference_policy import read_admitted_inference
     from agent.codex_runtime import run_codex_stream
     pin = read_admitted_inference(authored())
+    assert pin is not None
     sent = []
     for role, effort in [(pin, "xhigh"), (pin.descendant(), "high")]:
         agent = make_agent(job_inference=role, service_tier="priority", reasoning_config={"enabled": True, "effort": "low"})

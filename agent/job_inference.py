@@ -42,10 +42,8 @@ def guard_codex_request(agent: Any, client: Any, request: dict) -> None:
         raise JobInferenceError("inference_policy requires the default service tier")
 
 
-def delegation_routing(parent: Any, supplied: dict | None) -> dict | None:
-    pin = getattr(parent, "job_inference", None)
-    if pin is None:
-        return supplied
+def delegation_routing(parent: Any, supplied: dict | None) -> dict:
+    pin = parent.job_inference
     child = pin.descendant()
     if supplied is not None:
         child.require_route(supplied.get("provider", child.route.provider),

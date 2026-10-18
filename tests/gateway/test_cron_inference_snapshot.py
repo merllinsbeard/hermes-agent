@@ -2,6 +2,7 @@ import asyncio
 from dataclasses import asdict
 import json
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -25,7 +26,7 @@ def test_exact_retry_cold_restore_and_compression_keep_admitted_selection(tmp_pa
     from agent.job_inference_policy import read_admitted_inference
 
     job = create_job("Synthetic admission", "every 1h", **authored())
-    config = {"model": {"default": "profile-original"}, "platform_toolsets": {"cli": []}}
+    config: dict[str, Any] = {"model": {"default": "profile-original"}, "platform_toolsets": {"cli": []}}
     monkeypatch.setattr(run, "_load_gateway_config", lambda: config)
     db = SessionDB(tmp_path / "private-state.db")
     store = SessionStore(tmp_path / "private-sessions", GatewayConfig())
@@ -52,6 +53,7 @@ def test_exact_retry_cold_restore_and_compression_keep_admitted_selection(tmp_pa
         saved = local_receipt(db, sid)
         frozen = restore_policy(saved["policy"])
         pin = read_admitted_inference(json.loads(frozen.request_json)["cron_job"])
+        assert pin is not None
         assert (pin.route.model, pin.main_effort, pin.delegation_effort) == ("gpt-6.1-sol", "xhigh", "high")
         assert len(list_session_admissions(db, session_id=sid, pending_only=False)) == 1
         authority.sessions.clear()

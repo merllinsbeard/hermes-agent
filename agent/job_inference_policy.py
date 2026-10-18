@@ -113,7 +113,7 @@ class AgentRolePin:
     def descendant(self) -> AgentRolePin:
         return replace(self, role="delegate")
 
-    def reasoning_config(self) -> dict:
+    def reasoning_config(self) -> dict | None:
         from hermes_constants import parse_reasoning_effort
         return parse_reasoning_effort(self.effort)
 

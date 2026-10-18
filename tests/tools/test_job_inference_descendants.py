@@ -45,12 +45,18 @@ def test_registry_single_batch_and_nested_inherit_whole_pin(monkeypatch):
     tokens = set_session_vars(async_delivery=False)
     parent = make_agent(job_inference=read_admitted_inference(authored()), enabled_toolsets=["delegation"])
     try:
-        first = json.loads(registry.dispatch("delegate_task", {"goal": "synthetic single", "model": "ignored-model"}, parent_agent=parent))
+        raw_first = registry.dispatch("delegate_task", {"goal": "synthetic single", "model": "ignored-model"}, parent_agent=parent)
+        assert isinstance(raw_first, str)
+        first = json.loads(raw_first)
         assert first["results"][0]["summary"] == "synthetic-ok"
-        batch = json.loads(registry.dispatch("delegate_task", {"tasks": [
-            {"goal": "synthetic batch one", "model": "ignored-task-model"}, {"goal": "synthetic batch two"}]}, parent_agent=parent))
+        raw_batch = registry.dispatch("delegate_task", {"tasks": [
+            {"goal": "synthetic batch one", "model": "ignored-task-model"}, {"goal": "synthetic batch two"}]}, parent_agent=parent)
+        assert isinstance(raw_batch, str)
+        batch = json.loads(raw_batch)
         assert [entry["summary"] for entry in batch["results"]] == ["synthetic-ok", "synthetic-ok"]
-        nested = json.loads(registry.dispatch("delegate_task", {"goal": "nested synthetic"}, parent_agent=parent))
+        raw_nested = registry.dispatch("delegate_task", {"goal": "nested synthetic"}, parent_agent=parent)
+        assert isinstance(raw_nested, str)
+        nested = json.loads(raw_nested)
         assert nested["results"][0]["summary"] == "synthetic-ok"
         assert sorted(row[0] for row in observed) == [1, 1, 1, 1, 1, 2]
         assert [row[1:] for row in observed] == [("gpt-6.1-sol", "openai-codex", "high", None)] * 6
@@ -75,7 +81,9 @@ def test_background_pin_survives_scope_beside_legacy_agent(monkeypatch):
     parent = make_agent(job_inference=read_admitted_inference(authored()), platform="cli")
     tokens = set_session_vars(async_delivery=True)
     try:
-        reply = json.loads(registry.dispatch("delegate_task", {"goal": "synthetic detached"}, parent_agent=parent))
+        raw_reply = registry.dispatch("delegate_task", {"goal": "synthetic detached"}, parent_agent=parent)
+        assert isinstance(raw_reply, str)
+        reply = json.loads(raw_reply)
         assert reply["mode"] == "background", reply
         assert started.wait(20)
         clear_session_vars(tokens)

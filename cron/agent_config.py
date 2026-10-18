@@ -1,4 +1,3 @@
-"""Profile-scoped prefill input for cron agent construction."""
 import json
 import logging
 from pathlib import Path

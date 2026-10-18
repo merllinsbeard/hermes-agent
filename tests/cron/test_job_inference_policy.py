@@ -1,4 +1,3 @@
-"""Synthetic native cron/agent flows. Only the model transport and startup services are controlled."""
 from __future__ import annotations
 
 import argparse

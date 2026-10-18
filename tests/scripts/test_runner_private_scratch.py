@@ -1,4 +1,3 @@
-"""A native runner caller owns every temporary file and stale-root cleanup."""
 from pathlib import Path
 import json
 import os

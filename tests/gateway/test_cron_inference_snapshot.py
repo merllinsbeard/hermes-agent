@@ -1,4 +1,3 @@
-"""Real private admission receipts retain agent pins across edits and compression lineage."""
 import asyncio
 from dataclasses import asdict
 import json

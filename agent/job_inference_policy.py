@@ -1,4 +1,3 @@
-"""Owner-authored inference selection for one admitted cron execution."""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace

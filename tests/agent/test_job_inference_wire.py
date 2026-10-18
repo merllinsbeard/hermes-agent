@@ -1,4 +1,3 @@
-"""Final native Codex requests against a controlled httpx MOCK transport, never a model backend."""
 import json
 
 import httpx

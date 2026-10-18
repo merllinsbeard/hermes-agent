@@ -1,4 +1,3 @@
-"""Native registry children and their turns use a controlled MOCK HTTP model transport."""
 import json
 import threading
 

@@ -1,4 +1,3 @@
-"""Native agent and Codex boundaries for an admitted cron role pin."""
 from __future__ import annotations
 
 from typing import Any
@@ -19,7 +18,6 @@ def require_job_agent(agent: Any, client: Any = None) -> None:
 
 
 def guard_codex_request(agent: Any, client: Any, request: dict) -> None:
-    """Check what the SDK sends, after all per-attempt middleware and normalization."""
     pin = getattr(agent, "job_inference", None)
     if pin is None:
         return
@@ -40,7 +38,6 @@ def guard_codex_request(agent: Any, client: Any, request: dict) -> None:
 
 
 def delegation_routing(parent: Any, supplied: dict | None) -> dict | None:
-    """A job-owned route precedes credential resolution; other delegation controls stay native."""
     pin = getattr(parent, "job_inference", None)
     if pin is None:
         return supplied

@@ -1,4 +1,3 @@
-"""Constructor parameter groups and input validation for ``init_agent``."""
 
 # Constructor params stored verbatim under the same name.
 _PASSTHROUGH_PARAMS = (

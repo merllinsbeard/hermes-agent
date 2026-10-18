@@ -1,4 +1,3 @@
-"""Native cron/subagent titles stay local; the ordinary interactive title service still runs."""
 from types import SimpleNamespace
 
 import pytest

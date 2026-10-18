@@ -300,11 +300,11 @@ def stamp_message_timestamp(
     host_default = message.get("timestamp") is None and timestamp is None
     if message.get("timestamp") is None:
         message["timestamp"] = wall_time() if host_default else timestamp
-    if message.get(ORIGIN_STATEMENTS) is None:
-        message[ORIGIN_STATEMENTS] = observed_origin(
+    if host_default or message.get(ORIGIN_STATEMENTS) is None:
+        message[ORIGIN_STATEMENTS] = merge_origins(message.get(ORIGIN_STATEMENTS), observed_origin(
             message["timestamp"], field="stamp_message_timestamp" if host_default else "message.timestamp",
             meaning="host_stamp" if host_default else "unknown", uid=stamp_message_uid(message),
-        )
+        ))
     return message
 
 

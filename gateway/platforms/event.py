@@ -10,7 +10,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from agent.message_origin import observed_origin
+from agent.message_origin import merge_origins, observed_origin
 from gateway.session import SessionSource
 
 # Desktop attachment reference tags prepended by buildContextText before the
@@ -121,13 +121,13 @@ class MessageEvent:
         host_default = self.timestamp is None
         if host_default:
             self.timestamp = datetime.now()
-        if self.origin_statements is None:
+        if host_default or self.origin_statements is None:
             platform = getattr(getattr(self.source, "platform", None), "value", None)
-            self.origin_statements = observed_origin(
+            self.origin_statements = merge_origins(self.origin_statements, observed_origin(
                 self.timestamp, field="MessageEvent.timestamp.default" if host_default else "MessageEvent.timestamp",
                 meaning="host_stamp" if host_default else "unknown",
                 source_id=str(self.message_id) if self.message_id is not None else None, source_scope=platform,
-            )
+            ))
 
     def absorb_reply_expected(self, other: "MessageEvent") -> None:
         """One turn now answers *other* too: an addressed message wins, then an unknown one."""

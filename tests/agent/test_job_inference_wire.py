@@ -38,7 +38,7 @@ def test_native_main_and_delegate_wire_selection():
     pin = read_admitted_inference(authored())
     sent = []
     for role, effort in [(pin, "xhigh"), (pin.descendant(), "high")]:
-        agent = make_agent(job_inference=role)
+        agent = make_agent(job_inference=role, service_tier="priority", reasoning_config={"enabled": True, "effort": "low"})
         with controlled_client(sent) as client:
             try:
                 result = run_codex_stream(agent, built_request(agent), client=client)

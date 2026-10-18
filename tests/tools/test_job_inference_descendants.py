@@ -125,7 +125,7 @@ def test_public_lifecycle_uses_the_common_child_pin(monkeypatch):
         handle = service.launch({"goal": "Synthetic public lifecycle"})
         assert service.wait(handle, timeout_seconds=20).completed
         result = service.collect(handle)
-        assert result.terminal_state == SubagentState.COMPLETED and result.summary == "synthetic-ok"
+        assert result.terminal_state == SubagentState.SUCCEEDED and result.summary == "synthetic-ok"
         assert observed == [(1, "gpt-6.1-sol", "openai-codex", "high", None)]
     finally:
         parent.close()

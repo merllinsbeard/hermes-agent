@@ -69,6 +69,8 @@ def sandbox(tmp_path, monkeypatch):
         "  orchestrator_enabled: true\n  max_spawn_depth: 3\n"
         "  fallback_providers:\n    - provider: openrouter\n      model: fallback-other\n",
         encoding="utf-8")
+    from cron import jobs
+    assert Path(jobs.__file__).resolve().parents[1] == Path(__file__).resolve().parents[2]
     yield SimpleNamespace(home=home, manager=manager)
     assert unhandled == []
 

@@ -90,6 +90,8 @@ def _create(authority, actor, params):
     if job is None or job.get('no_agent'):
         raise RuntimeStoreError('not_found')
     config = _load_gateway_config()
+    from agent.job_inference_policy import normalize_admitted_job
+    job = normalize_admitted_job(job, provider_defaults=config)
     private = {}
     launch = {'source': 'cli', 'request_id': request_id, 'toolsets': []}
     if job.get('workdir'):

@@ -3,7 +3,7 @@
 ``create_job`` and ``update_job`` (``cron/jobs.py``) both run these, so an update cannot
 bypass a rule the create door enforces.
 """
-from typing import Optional
+from typing import Any, Optional
 
 from hermes_constants import display_hermes_home
 
@@ -51,3 +51,24 @@ def _script_is_command_line(script: str) -> bool:
     from cron.lifecycle_guard import _resolve_script_path
     path = _resolve_script_path(script)
     return path is None or not path.is_file()
+
+
+def _normalize_reasoning_effort(value: Any) -> Optional[str]:
+    """Spelling-only validation via the shared parser (cron knob never stricter/looser than
+    config.yaml); model capability is deliberately NOT checked (model unknowable at create time,
+    transports clamp at send time). None for unset, lowercase level, or ValueError."""
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    from hermes_constants import parse_reasoning_effort
+
+    if parse_reasoning_effort(text) is None:
+        raise ValueError(
+            f"Invalid reasoning_effort {value!r}. Valid levels: "
+            "none, minimal, low, medium, high, xhigh, max, ultra "
+            "(empty string clears the override).")
+    if text in {"false", "disabled"}:
+        return "none"
+    return text

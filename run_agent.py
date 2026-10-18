@@ -33,6 +33,7 @@ import threading
 import uuid
 import warnings
 from typing import List, Dict, Any, Optional, Callable
+from agent.job_inference_policy import AgentRolePin
 from datetime import datetime
 from pathlib import Path
 
@@ -278,6 +279,7 @@ class AIAgent(
         capabilities: dict[str, bool] | None = None, cwd: str | None = None,
         side_agent: bool = False, memory_manager=None,
         tool_result_metadata_callback: Optional[Callable[..., dict]] = None,
+        job_inference: "AgentRolePin | None" = None,
     ):
         """Forwarder — see ``agent.agent_init.init_agent`` (same keyword parameters, minus ``tool_delay``)."""
         init_kwargs = {k: v for k, v in locals().items() if k not in ("self", "tool_delay")}

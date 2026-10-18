@@ -8,13 +8,14 @@ from typing import Any, Dict
 
 from cron.jobs import _apply_schedule_update, _jobs_lock, is_job_runnable, load_jobs, parse_schedule, save_jobs
 from cron.quota_hold import clear_state as _clear_quota_hold
+from agent.job_inference_policy import validate_job_inference
 from hermes_time import now as _hermes_now
 
 JOB_DEFINITION_FIELDS = frozenset({
     "name", "prompt", "skills", "skill", "model", "provider", "base_url",
     "script", "no_agent", "monitor_script", "monitor_url", "context_from",
     "schedule", "schedule_display", "deliver", "origin", "enabled_toolsets",
-    "workdir", "attach_to_session", "reasoning_effort", "failure_deliver",
+    "workdir", "attach_to_session", "reasoning_effort", "failure_deliver", "inference_policy",
 })
 
 
@@ -42,7 +43,7 @@ def merge_job_definition(local: dict[str, Any], authored: dict[str, Any]) -> dic
             _apply_schedule_update(merged, updates, str(merged.get("id") or "imported job"))
         else:
             merged["next_run_at"] = None
-    return merged
+    return validate_job_inference(merged, allow_clear=True)
 
 
 def import_job_definitions(shipped: dict[str, dict[str, Any]], *, paused_reason: str) -> None:

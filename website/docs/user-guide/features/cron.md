@@ -42,6 +42,33 @@ Whichever provider a job resolves to, its provider-specific request settings (e.
 Cron-run sessions cannot recursively create more cron jobs. Hermes disables cron management tools inside cron executions to prevent runaway scheduling loops.
 :::
 
+### Exact agent selection for one job
+
+An owner can opt a job into `inference_policy`. The existing `provider`, `model`, and
+`reasoning_effort` fields select its main agent. The policy adds an independent effort for
+delegated agents and requires the normal service tier:
+
+```bash
+hermes cron create 'every 1h' 'Check the project' \
+  --provider openai-codex --model gpt-6.1-sol --reasoning-effort xhigh \
+  --inference-policy '{"delegation_reasoning_effort":"high","service_tier":"default"}'
+```
+
+Both policy fields and all three main selection fields are required. Unknown fields, `null`,
+and provider `auto` are rejected. Authored job imports accept the same object. The model-facing
+cron tool cannot set this policy or select another inference route.
+
+The admitted run freezes its route and both efforts. Its permitted single, batch, nested, and
+background delegated agents retain that route and the delegation effort. Profile delegation,
+fast-mode settings, and fallback models cannot replace the selection. An unsupported effort
+or a conflicting request override fails before the changed request is sent. Exact selection
+currently supports `codex_responses`; an explicit app-server or another transport is refused.
+Compression and other specialized auxiliary services retain their own configuration.
+
+Use `hermes cron edit JOB_ID --inference-policy ''` to clear the policy for future admissions.
+Already admitted runs, including retries and restored sessions, retain their saved selection.
+Jobs without the field keep the usual defaults, clamping, and fallback behavior.
+
 ## Admission recovery
 
 Agent-backed runs retain their fire identity until output and a durable delivery handoff are recorded.

@@ -11,6 +11,8 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List
 
+from agent.job_inference_policy import JobInferenceError
+
 logger = logging.getLogger(__name__)
 
 OBSERVER_SCHEMA_VERSION = "hermes.observer.v1"
@@ -201,6 +203,8 @@ def _run_execution_chain(kind: str, terminal_call: Callable[[Any], Any], **kwarg
             return callback(**call_kwargs)
         except _DownstreamExecutionError as exc:
             raise exc.original
+        except JobInferenceError:
+            raise
         except Exception as exc:
             # Runs once per tool/LLM call: a mis-declared callback fails identically every time,
             # so it goes through the manager's warn-once reporter (#111922).

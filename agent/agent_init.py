@@ -20,11 +20,15 @@ from contextlib import suppress
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
+from agent.job_inference_policy import AgentRolePin
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 from agent.context_compressor import ContextCompressor
 from agent.agent_init_fallback import _fallback_entries, _init_fallback_chain, recompute_init_fallback_api_mode
-from agent.agent_init_params import _CALLBACK_PARAMS, _GATEWAY_IDENTITY_PARAMS, _PASSTHROUGH_PARAMS
+from agent.agent_init_params import (
+    _CALLBACK_PARAMS, _GATEWAY_IDENTITY_PARAMS, _PASSTHROUGH_PARAMS,
+    _normalize_run_budget_seconds, _refuse_checkpoint_required_on_codex_app_server,
+)
 from agent.agent_runtime_helpers import _ra
 from agent.iteration_budget import IterationBudget, normalize_budget_warning_ratio
 from agent.memory_context import StreamingContextScrubber
@@ -319,35 +323,6 @@ def _merge_custom_provider_extra_body(agent, custom_providers: list[dict[str, An
         merged_extra_body.update(existing_extra_body)
     overrides["extra_body"] = merged_extra_body
     agent.request_overrides = overrides
-
-
-def _normalize_run_budget_seconds(value) -> Optional[float]:
-    """Positive float or None (feature off). ``bool`` rejected: YAML ``true`` → 1s budget."""
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        seconds = float(value)
-    except (TypeError, ValueError):
-        return None
-    return seconds if seconds > 0 else None  # NaN compares False → None
-
-
-
-def _refuse_checkpoint_required_on_codex_app_server(
-    checkpoint_required: bool, api_mode: Optional[str]
-) -> None:
-    """Fail closed at init: the codex app-server compacts its own thread without a truthful
-    pre-compaction boundary (default "native" mode), so a required checkpoint can't be
-    guaranteed — the compress_context() guard alone cannot cover native turns."""
-    if checkpoint_required and api_mode == "codex_app_server":
-        raise RuntimeError(
-            "BLOCKED_MISSING_PREREQUISITE: compression.checkpoint_required "
-            "is incompatible with the codex_app_server API mode: the codex "
-            "agent compacts its own thread without a truthful pre-compaction "
-            "transcript boundary, so a required pre-compress checkpoint "
-            "cannot be guaranteed. Disable compression.checkpoint_required "
-            "or use a non-app-server API mode."
-        )
 
 
 def _parse_config_int(raw: Any, default: int) -> int:
@@ -2285,6 +2260,7 @@ def init_agent(
     requested_provider: str | None = None, capabilities: Optional[dict[str, bool]] = None, cwd: Optional[str] = None,
     side_agent: bool = False, memory_manager=None,
     tool_result_metadata_callback: Optional[Callable[..., dict]] = None,
+    job_inference: AgentRolePin | None = None,
 ):
     from agent.safe_worker_policy import safe_worker_enabled
 
@@ -2293,6 +2269,18 @@ def init_agent(
         load_soul_identity = False
         prefill_messages = []
         fallback_model = {}
+    agent.job_inference = job_inference
+    if job_inference is not None:
+        route = job_inference.route
+        job_inference.require_route(requested_provider or provider or route.provider,
+                                    model or route.model, base_url or route.endpoint)
+        if api_mode is not None:
+            job_inference.require_transport(api_mode)
+        if acp_command or command:
+            from agent.job_inference_policy import JobInferenceError
+            raise JobInferenceError("inference_policy does not support an external process transport")
+        provider, model, base_url = job_inference.route.provider, job_inference.route.model, job_inference.route.endpoint
+        reasoning_config, service_tier, fallback_model = job_inference.reasoning_config(), "", []
     _install_safe_stdio()
 
     _params = locals()
@@ -2333,6 +2321,8 @@ def init_agent(
     agent.acp_args = list(acp_args or args or [])
     _resolve_api_mode(agent, api_mode, provider_name, base_url)
     _finalize_routing(agent, api_mode, credential_pool)
+    from agent.job_inference import require_job_agent
+    require_job_agent(agent)
 
     # Platform callbacks are stored under their parameter names verbatim.
     for _cb in _CALLBACK_PARAMS:

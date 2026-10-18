@@ -85,6 +85,11 @@ WARNING — the message lists the fields it does provide — and identical repea
 to DEBUG, so a mis-declared middleware cannot flood the log; a plugin reload
 resets the report.
 
+Cron `inference_policy` refusals propagate through middleware. A middleware
+rewrite cannot change an admitted agent's provider, endpoint, model, reasoning
+effort, or normal service tier. Hermes checks the final Codex request before
+each send.
+
 ## Execution Order
 
 ### LLM Calls

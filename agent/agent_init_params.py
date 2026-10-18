@@ -1,4 +1,4 @@
-"""Names of the ``AIAgent`` constructor params that ``init_agent`` copies onto the agent."""
+"""Constructor parameter groups and input validation for ``init_agent``."""
 
 # Constructor params stored verbatim under the same name.
 _PASSTHROUGH_PARAMS = (
@@ -31,3 +31,30 @@ _CALLBACK_PARAMS = (
     "status_callback", "notice_callback", "notice_clear_callback",
     "event_callback", "reaction_callback", "tool_gen_callback",
 )
+
+
+def _normalize_run_budget_seconds(value) -> float | None:
+    """Positive float or None (feature off). ``bool`` rejected: YAML ``true`` → 1s budget."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None  # NaN compares False → None
+
+def _refuse_checkpoint_required_on_codex_app_server(
+    checkpoint_required: bool, api_mode: str | None
+) -> None:
+    """Fail closed at init: the codex app-server compacts its own thread without a truthful
+    pre-compaction boundary (default "native" mode), so a required checkpoint can't be
+    guaranteed — the compress_context() guard alone cannot cover native turns."""
+    if checkpoint_required and api_mode == "codex_app_server":
+        raise RuntimeError(
+            "BLOCKED_MISSING_PREREQUISITE: compression.checkpoint_required "
+            "is incompatible with the codex_app_server API mode: the codex "
+            "agent compacts its own thread without a truthful pre-compaction "
+            "transcript boundary, so a required pre-compress checkpoint "
+            "cannot be guaranteed. Disable compression.checkpoint_required "
+            "or use a non-app-server API mode."
+        )

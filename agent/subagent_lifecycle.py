@@ -295,6 +295,10 @@ class SubagentLifecycleService:
         )
         # Routing precedence: request.provider > delegation config > parent.
         routing_cfg = {"provider": request.provider, "model": request.model or ""} if request.provider is not None else _load_config()
+        from agent.job_inference import delegation_routing
+        if getattr(parent, "job_inference", None) is not None:
+            supplied = {key: value for key, value in (("provider", request.provider), ("model", request.model)) if value}
+            routing_cfg = delegation_routing(parent, supplied or None)
         try:
             creds = _resolve_delegation_credentials(routing_cfg, parent)
         except ValueError as exc:

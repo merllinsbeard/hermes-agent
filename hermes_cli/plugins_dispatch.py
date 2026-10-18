@@ -661,6 +661,7 @@ class PluginDispatchMixin:
         """
         from agent.safe_worker_policy import safe_worker_enabled
         from hermes_cli.middleware import _safe_copy
+        from agent.job_inference_policy import JobInferenceError
 
         if safe_worker_enabled():
             return []
@@ -677,6 +678,8 @@ class PluginDispatchMixin:
                     results.append(ret)
                     if _payload_key and isinstance(ret, dict) and isinstance(ret.get(_payload_key), dict):
                         kwargs[_payload_key] = ret[_payload_key]
+            except JobInferenceError:
+                raise
             except (Exception, SystemExit) as exc:
                 # Runs once per tool call like a hook, so a mis-declared callback floods identically.
                 self._report_hook_failure(kind, cb, kwargs, exc, surface="Middleware")

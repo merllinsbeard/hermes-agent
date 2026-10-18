@@ -538,7 +538,10 @@ def delegate_task(
     # credentials_cfg (internal callers only, e.g. /review → auxiliary.review) is
     # a per-call routing owner shaped like the delegation config section. Keep
     # the route and its fallback policy together through child construction.
+    from agent.job_inference import delegation_routing
     routing_cfg = credentials_cfg if credentials_cfg is not None else cfg
+    if getattr(parent_agent, "job_inference", None) is not None:
+        routing_cfg = delegation_routing(parent_agent, credentials_cfg)
     try:
         creds = _resolve_delegation_credentials(routing_cfg, parent_agent)
     except ValueError as exc:

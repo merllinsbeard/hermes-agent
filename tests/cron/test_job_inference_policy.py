@@ -633,7 +633,7 @@ def test_native_singleton_refresh_preserves_ownership_and_explicit_url(native_bi
             monkeypatch.setattr(auth, "resolve_codex_runtime_credentials", foreign)
             assert agent._try_refresh_codex_client_credentials() is False
             assert reads == [{"refresh_if_expiring": False}]
-            next_url = explicit if case == "explicit_same" else "https://refreshed.example.invalid/v1"
+            next_url = ENDPOINT + "/authored" if case == "explicit_same" else "https://refreshed.example.invalid/v1"
 
             def refresh(**kw):
                 return {"api_key": "synthetic-A", "base_url": old_url} if "refresh_if_expiring" in kw else {

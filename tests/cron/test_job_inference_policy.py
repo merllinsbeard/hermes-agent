@@ -193,6 +193,27 @@ def test_frozen_named_route_does_not_consult_later_profile(monkeypatch):
             pin.require_route(provider, "gpt-6.1-sol", endpoint)
 
 
+def test_inference_admission_inherits_native_profile_endpoint(monkeypatch):
+    from agent.job_inference_policy import normalize_admitted_job
+    from agent.secret_scope import set_secret_scope, reset_secret_scope
+    from hermes_cli import runtime_provider
+
+    config = {"model": {"provider": "openai-codex", "base_url": "https://proxy.example.invalid/v1"}}
+    entry = SimpleNamespace(runtime_base_url=ENDPOINT, runtime_api_key="synthetic-not-a-credential", source="synthetic")
+    pool = SimpleNamespace(provider="openai-codex", has_credentials=lambda: True, select=lambda **kw: entry)
+    monkeypatch.setattr(runtime_provider, "load_pool", lambda provider: pool)
+    monkeypatch.setattr("hermes_cli.config.load_config", lambda **kw: config)
+    token = set_secret_scope({})
+    try:
+        native = runtime_provider.resolve_runtime_provider(requested="openai-codex", target_model="gpt-6.1-sol")
+        assert (native["provider"], native["base_url"]) == ("openai-codex", "https://proxy.example.invalid/v1")
+        frozen = normalize_admitted_job(authored(base_url=None), provider_defaults=config)
+        assert (frozen["provider"], frozen["model"], frozen["base_url"]) == (
+            "openai-codex", "gpt-6.1-sol", "https://proxy.example.invalid/v1")
+    finally:
+        reset_secret_scope(token)
+
+
 def make_agent(**changes: Any):
     from run_agent import AIAgent
     options: dict[str, Any] = dict(api_key="synthetic-not-a-credential", base_url=ENDPOINT, provider="openai-codex",

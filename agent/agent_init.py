@@ -20,11 +20,15 @@ from contextlib import suppress
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional
+from agent.job_inference_policy import AgentRolePin
 from urllib.parse import parse_qs, urlparse, urlunparse
 
 from agent.context_compressor import ContextCompressor
 from agent.agent_init_fallback import _fallback_entries, _init_fallback_chain, recompute_init_fallback_api_mode
-from agent.agent_init_params import _CALLBACK_PARAMS, _GATEWAY_IDENTITY_PARAMS, _PASSTHROUGH_PARAMS
+from agent.agent_init_params import (
+    _CALLBACK_PARAMS, _GATEWAY_IDENTITY_PARAMS, _PASSTHROUGH_PARAMS,
+    _normalize_run_budget_seconds, _refuse_checkpoint_required_on_codex_app_server,
+)
 from agent.agent_runtime_helpers import _ra
 from agent.iteration_budget import IterationBudget, normalize_budget_warning_ratio
 from agent.memory_context import StreamingContextScrubber
@@ -319,35 +323,6 @@ def _merge_custom_provider_extra_body(agent, custom_providers: list[dict[str, An
         merged_extra_body.update(existing_extra_body)
     overrides["extra_body"] = merged_extra_body
     agent.request_overrides = overrides
-
-
-def _normalize_run_budget_seconds(value) -> Optional[float]:
-    """Positive float or None (feature off). ``bool`` rejected: YAML ``true`` → 1s budget."""
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        seconds = float(value)
-    except (TypeError, ValueError):
-        return None
-    return seconds if seconds > 0 else None  # NaN compares False → None
-
-
-
-def _refuse_checkpoint_required_on_codex_app_server(
-    checkpoint_required: bool, api_mode: Optional[str]
-) -> None:
-    """Fail closed at init: the codex app-server compacts its own thread without a truthful
-    pre-compaction boundary (default "native" mode), so a required checkpoint can't be
-    guaranteed — the compress_context() guard alone cannot cover native turns."""
-    if checkpoint_required and api_mode == "codex_app_server":
-        raise RuntimeError(
-            "BLOCKED_MISSING_PREREQUISITE: compression.checkpoint_required "
-            "is incompatible with the codex_app_server API mode: the codex "
-            "agent compacts its own thread without a truthful pre-compaction "
-            "transcript boundary, so a required pre-compress checkpoint "
-            "cannot be guaranteed. Disable compression.checkpoint_required "
-            "or use a non-app-server API mode."
-        )
 
 
 def _parse_config_int(raw: Any, default: int) -> int:
@@ -978,6 +953,8 @@ def _apply_openai_header_policy(agent, client_kwargs: dict[str, Any]) -> None:
             apply_custom_provider_tls_to_client_kwargs, get_compatible_custom_providers,
             load_config,
         )
+        if agent.job_inference is not None:
+            from hermes_cli.runtime_provider import load_config
         _cp_entries = get_compatible_custom_providers(load_config())
         _cp_base_url = str(client_kwargs.get("base_url") or agent.base_url or "")
         apply_custom_provider_tls_to_client_kwargs(client_kwargs, _cp_base_url, _cp_entries)
@@ -1117,7 +1094,11 @@ def _load_tools(agent, enabled_toolsets, disabled_toolsets):
     disabled_toolsets = session_disabled_toolsets(disabled_toolsets, getattr(agent, "platform", None))
     agent.disabled_toolsets = disabled_toolsets  # so the tool_search bridge and delegate children drop them too
     agent.tools = model_tools.get_tool_definitions(
-        enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets, quiet_mode=agent.quiet_mode)
+        enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets, quiet_mode=agent.quiet_mode,
+        **({"skip_tool_search_assembly": True} if agent.job_inference is not None else {}))
+    if agent.job_inference is not None:
+        from agent.job_inference import assemble_job_tools
+        agent.tools = assemble_job_tools(agent, agent.tools)
     # A finite -q run has no later session to learn for: no skill authoring tool (agent/oneshot_footprint.py).
     from agent.oneshot_footprint import prune_oneshot_tools
     agent.tools = prune_oneshot_tools(agent.tools or [])
@@ -2279,12 +2260,14 @@ def init_agent(
     load_soul_identity: bool = False, skip_memory: bool = False,
     skip_background_review: bool = False, session_db=None, parent_session_id: str | None = None,
     iteration_budget: IterationBudget = None, run_budget_seconds: Optional[float] = None,
-    fallback_model: dict[str, Any] | None = None, credential_pool=None, checkpoints_enabled: bool = False,
+    fallback_model: dict[str, Any] | list[dict[str, Any]] | None = None, credential_pool=None, checkpoints_enabled: bool = False,
     checkpoint_max_snapshots: int = 20, checkpoint_max_total_size_mb: int = 500,
     checkpoint_max_file_size_mb: int = 10, pass_session_id: bool = False,
     requested_provider: str | None = None, capabilities: Optional[dict[str, bool]] = None, cwd: Optional[str] = None,
     side_agent: bool = False, memory_manager=None,
     tool_result_metadata_callback: Optional[Callable[..., dict]] = None,
+    job_inference: AgentRolePin | None = None,
+    native_runtime: dict[str, Any] | None = None,
 ):
     from agent.safe_worker_policy import safe_worker_enabled
 
@@ -2293,6 +2276,19 @@ def init_agent(
         load_soul_identity = False
         prefill_messages = []
         fallback_model = {}
+    agent.job_inference = job_inference
+    if job_inference is not None:
+        from agent.job_inference import resolve_job_runtime
+        native_runtime = resolve_job_runtime(job_inference, native_runtime,
+            provider=requested_provider or provider, model=model, base_url=base_url,
+            api_mode=api_mode, command=acp_command or command)
+        agent._job_runtime = native_runtime
+        provider, model, base_url = native_runtime["provider"], job_inference.route.model, native_runtime["base_url"]
+        requested_provider = native_runtime.get("requested_provider") or job_inference.route.provider
+        api_key, api_mode = native_runtime["api_key"], native_runtime["api_mode"]
+        credential_pool = native_runtime.get("credential_pool")
+        request_overrides = native_runtime.get("request_overrides") or request_overrides
+        reasoning_config, service_tier, fallback_model = job_inference.reasoning_config(), "", []
     _install_safe_stdio()
 
     _params = locals()
@@ -2334,7 +2330,6 @@ def init_agent(
     _resolve_api_mode(agent, api_mode, provider_name, base_url)
     _finalize_routing(agent, api_mode, credential_pool)
 
-    # Platform callbacks are stored under their parameter names verbatim.
     for _cb in _CALLBACK_PARAMS:
         setattr(agent, _cb, _params[_cb])
     agent.suppress_status_output = False
@@ -2359,15 +2354,20 @@ def init_agent(
     _set_defaults(agent, _STREAM_STATE)
     _build_client(agent, api_key, base_url, fallback_model)
     _init_fallback_chain(agent, fallback_model)
+    if job_inference is not None:
+        from agent.job_inference import require_job_agent
+        agent._credential_pool_entry_id = agent._job_runtime.get("credential_pool_entry_id")
+        require_job_agent(agent, agent.client)
     _load_tools(agent, enabled_toolsets, disabled_toolsets)
     _init_session_state(
         agent, session_id, session_db, parent_session_id, reasoning_config, max_tokens,
         checkpoints_enabled, checkpoint_max_snapshots, checkpoint_max_total_size_mb, checkpoint_max_file_size_mb,
     )
 
-    # Load config once for memory, skills, and compression sections
     try:
         from hermes_cli.config import load_config_readonly as _load_agent_config
+        if job_inference is not None:
+            from hermes_cli.runtime_provider import load_config as _load_agent_config
         _agent_cfg = _load_agent_config()
     except Exception:
         _agent_cfg = {}

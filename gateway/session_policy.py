@@ -851,6 +851,9 @@ def restore_policy(data):
         for value in (policy.config_json, policy.request_json, policy.terminal_json):
             if not isinstance(json.loads(value), dict):
                 raise ValueError('invalid policy object')
+        if policy.source == "cron":
+            from agent.job_inference_policy import read_admitted_inference
+            read_admitted_inference(json.loads(policy.request_json)["cron_job"])
         terminal = json.loads(policy.terminal_json)
         if terminal_uses_host_cwd(terminal) and terminal.get('TERMINAL_CWD') != policy.cwd:
             raise ValueError('terminal policy mismatch')

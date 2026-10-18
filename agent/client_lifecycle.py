@@ -563,8 +563,21 @@ class ClientLifecycleMixin:
 
     def _adopt_openai_credentials(self, api_key: str, base_url: str, *, reason: str) -> bool:
         """Apply a fresh key/base_url to the OpenAI-style kwargs and rebuild the shared client."""
+        if getattr(self, "job_inference", None) is not None:
+            from agent.job_inference import require_runtime
+            from agent.job_inference_policy import JobInferenceError
+            runtime = dict(self._job_runtime, api_key=api_key.strip(), base_url=base_url.strip().rstrip("/"))
+            try:
+                require_runtime(self.job_inference, runtime)
+            except JobInferenceError:
+                return False
+            self._job_runtime = runtime
+            from hermes_cli.route_identity import normalize_route_base_url
+            route_changed = normalize_route_base_url(self.base_url) != normalize_route_base_url(base_url)
         self.api_key, self.base_url = api_key.strip(), base_url.strip().rstrip("/")
         self._sync_client_kwargs_credentials()
+        if getattr(self, "job_inference", None) is not None:
+            self._reapply_route_client_config(route_changed=route_changed)
         return self._replace_primary_openai_client(reason=reason)
 
     def _try_refresh_codex_client_credentials(self, *, force: bool = True) -> bool:
@@ -956,7 +969,11 @@ class ClientLifecycleMixin:
         if self.api_mode not in ("anthropic_messages", "bedrock_converse"):
             try:
                 from hermes_cli.config import apply_custom_provider_extra_headers_to_client_kwargs
-                apply_custom_provider_extra_headers_to_client_kwargs(self._client_kwargs, base_url)
+                config = None
+                if getattr(self, "job_inference", None) is not None:
+                    from hermes_cli.runtime_provider import load_config
+                    config = load_config()
+                apply_custom_provider_extra_headers_to_client_kwargs(self._client_kwargs, base_url, config=config)
             except Exception:
                 logger.debug("custom-provider extra_headers skipped", exc_info=True)
 
@@ -966,7 +983,11 @@ class ClientLifecycleMixin:
         if self.api_mode in ("anthropic_messages", "bedrock_converse"):
             return
         from agent.auxiliary_client import _apply_user_default_headers as _merge_user_headers
-        merged = _merge_user_headers(self._client_kwargs.get("default_headers"))
+        config = None
+        if getattr(self, "job_inference", None) is not None:
+            from hermes_cli.runtime_provider import load_config
+            config = load_config()
+        merged = _merge_user_headers(self._client_kwargs.get("default_headers"), config=config)
         if merged:
             self._client_kwargs["default_headers"] = merged
 
@@ -976,6 +997,18 @@ class ClientLifecycleMixin:
         rotation; the caller treats a refused swap as "no entry")."""
         runtime_key = getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", "")
         runtime_base = getattr(entry, "runtime_base_url", None) or getattr(entry, "base_url", None) or self.base_url
+        runtime = None
+        if getattr(self, "job_inference", None) is not None:
+            from hermes_cli.runtime_provider import _resolve_runtime_from_pool_entry
+            from agent.job_inference import require_runtime
+            from agent.job_inference_policy import JobInferenceError
+            runtime = _resolve_runtime_from_pool_entry(provider=self.provider, entry=entry,
+                requested_provider=self.requested_provider, pool=self._credential_pool, target_model=self.model)
+            try:
+                require_runtime(self.job_inference, runtime)
+            except JobInferenceError:
+                return False
+            runtime_key, runtime_base = runtime["api_key"], runtime["base_url"]
         from hermes_cli.providers import is_actual_route
         actual_route = is_actual_route(getattr(self, "provider", ""), runtime_base)
         if actual_route:
@@ -991,6 +1024,8 @@ class ClientLifecycleMixin:
             self.api_mode = "chat_completions"
             if hasattr(self, "_transport_cache"):
                 self._transport_cache.clear()
+        if runtime is not None:
+            self._job_runtime = runtime
         self._credential_pool_entry_id = getattr(entry, "id", None)
         from hermes_cli.route_identity import normalize_route_base_url
         route_changed = normalize_route_base_url(self.base_url) != normalize_route_base_url(runtime_base)
@@ -1021,6 +1056,8 @@ class ClientLifecycleMixin:
             from hermes_cli.config import (
                 apply_custom_provider_tls_to_client_kwargs, get_compatible_custom_providers, load_config_readonly,
             )
+            if getattr(self, "job_inference", None) is not None:
+                from hermes_cli.runtime_provider import load_config as load_config_readonly
             apply_custom_provider_tls_to_client_kwargs(
                 self._client_kwargs, str(self.base_url or ""), get_compatible_custom_providers(load_config_readonly()),
             )

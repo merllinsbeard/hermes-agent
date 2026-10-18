@@ -319,7 +319,7 @@ def _build_child_agent(
     if parent_sid and getattr(child, "_session_init_model_config", None) is not None:
         child._session_init_model_config["_delegate_from"] = parent_sid
     # Shared pool lets children rotate credentials on rate limits.
-    child_pool = _resolve_child_credential_pool(
+    child_pool = None if getattr(child, "job_inference", None) is not None else _resolve_child_credential_pool(
         rt["provider"], parent_agent, rt["base_url"], effective_requested_provider=rt.get("requested_provider"),
     )
     if child_pool is not None:
@@ -538,7 +538,10 @@ def delegate_task(
     # credentials_cfg (internal callers only, e.g. /review → auxiliary.review) is
     # a per-call routing owner shaped like the delegation config section. Keep
     # the route and its fallback policy together through child construction.
+    from agent.job_inference import delegation_routing
     routing_cfg = credentials_cfg if credentials_cfg is not None else cfg
+    if getattr(parent_agent, "job_inference", None) is not None:
+        routing_cfg = delegation_routing(parent_agent, credentials_cfg)
     try:
         creds = _resolve_delegation_credentials(routing_cfg, parent_agent)
     except ValueError as exc:

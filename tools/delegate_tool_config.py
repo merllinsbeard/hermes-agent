@@ -428,6 +428,12 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
     ``provider`` set → full bundle via the runtime provider system (same path as CLI/gateway startup); neither →
     None values, child inherits everything. ``request_overrides`` is honored on every branch. Raises ValueError
     with a user-facing message."""
+    pin = getattr(parent_agent, "job_inference", None)
+    if pin is not None:
+        from agent.job_inference import delegation_routing
+        delegation_routing(parent_agent, cfg)
+        return _credential_bundle(pin.route.model, None, None, None, parent_agent.api_mode,
+                                  dict(getattr(parent_agent, "request_overrides", {}) or {}))
     values = {k: str(cfg.get(k) or "").strip() or None for k in ("model", "provider", "base_url", "api_key")}
     values["api_mode"] = str(cfg.get("api_mode") or "").strip().lower() or None
     explicit_request_overrides = cfg.get("request_overrides") if isinstance(cfg.get("request_overrides"), dict) else None
@@ -499,6 +505,11 @@ def _resolve_child_runtime(
     or is Nous Portal (dual-wire); a pinned ``delegation.command`` must exist on PATH or the spawn fails loudly;
     ``override_provider`` clears the parent's ACP transport, fallback chain and OpenRouter routing filters so the
     pinned provider is actually honoured."""
+    pin = getattr(parent_agent, "job_inference", None)
+    if pin is not None:
+        pin.require_route(override_provider or parent_agent.requested_provider, model or parent_agent.model,
+                          override_base_url or parent_agent.base_url)
+        pin.require_transport(override_api_mode or parent_agent.api_mode)
     effective_model = model or parent_agent.model
     # provider/base_url are one bundle: all from the override, or all from the parent. Per-field fallback built
     # children like an override provider pointed at the PARENT's endpoint (e.g. copilot credentials on the
@@ -600,6 +611,12 @@ def _resolve_child_runtime(
     }
     if not override_provider:
         kwargs["provider_data_collection"] = kwargs["provider_data_collection"] or ""
+    if pin is not None:
+        child = pin.descendant()
+        kwargs.update(job_inference=child, model=child.route.model, provider=child.route.provider,
+                      requested_provider=child.route.provider, base_url=child.route.endpoint,
+                      native_runtime=dict(parent_agent._job_runtime),
+                      reasoning_config=child.reasoning_config(), service_tier="", fallback_model=[])
     child_max_tokens = getattr(parent_agent, "max_tokens", None)
     if isinstance(child_max_tokens, int):
         kwargs["max_tokens"] = child_max_tokens

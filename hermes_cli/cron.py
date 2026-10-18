@@ -762,12 +762,24 @@ _JOB_ARG_FIELDS = (("name", "name"), ("deliver", "deliver"), ("failure_deliver",
                    ("model", "model"), ("provider", "model_provider"), ("pinned", "pinned"),
                    ("monitor_script", "monitor_script"), ("monitor_url", "monitor_url"),
                    ("continuity", "continuity"), ("reasoning_effort", "reasoning_effort"),
+                   ("inference_policy", "inference_policy"),
                    ("interpreter", "interpreter"))
 
 
 def _job_api_kwargs(args) -> dict[str, Any]:
     """Collect the create/update kwargs shared by ``cron create`` and ``cron edit``."""
-    return {api_key: getattr(args, attr, None) for api_key, attr in _JOB_ARG_FIELDS}
+    values = {api_key: getattr(args, attr, None) for api_key, attr in _JOB_ARG_FIELDS}
+    raw = values["inference_policy"]
+    if raw is None:
+        values.pop("inference_policy")
+    if raw not in (None, ""):
+        try:
+            values["inference_policy"] = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("--inference-policy must be a JSON object, or an empty string to clear") from exc
+        if values["inference_policy"] is None:
+            raise ValueError("--inference-policy null is invalid; use an empty string to clear")
+    return values
 
 
 _JOB_DETAIL_LINES = (
@@ -790,6 +802,11 @@ def _print_job_details(job_data: dict[str, Any]) -> None:
 def cron_create(args):
     # The gateway-lifecycle guard lives in cron.jobs.create_job (every creation path); a block
     # surfaces as result["error"].
+    try:
+        job_kwargs = _job_api_kwargs(args)
+    except ValueError as exc:
+        print(color(str(exc), Colors.RED))
+        return 1
     result = _cron_api(
         action="create", schedule=args.schedule, prompt=args.prompt,
         skill=getattr(args, "skill", None),
@@ -797,7 +814,7 @@ def cron_create(args):
         no_agent=getattr(args, "no_agent", False) or None,
         **({"paused": args.paused, "paused_reason": getattr(args, "paused_reason", None)}
            if getattr(args, "paused", False) or getattr(args, "paused_reason", None) is not None else {}),
-        **_job_api_kwargs(args))
+        **job_kwargs)
     if not result.get("success"):
         print(color(f"Failed to create job: {result.get('error', 'unknown error')}", Colors.RED))
         return 1
@@ -816,6 +833,11 @@ def cron_create(args):
 
 def cron_edit(args):
     from cron.jobs import AmbiguousJobReference, resolve_job_ref
+    try:
+        job_kwargs = _job_api_kwargs(args)
+    except ValueError as exc:
+        print(color(str(exc), Colors.RED))
+        return 1
     try:
         job = resolve_job_ref(args.job_id)
     except AmbiguousJobReference as exc:
@@ -842,7 +864,7 @@ def cron_edit(args):
     result = _cron_api(action="update", job_id=args.job_id,
                        schedule=getattr(args, "schedule", None),
                        prompt=getattr(args, "prompt", None), skills=final_skills,
-                       no_agent=getattr(args, "no_agent", None), **_job_api_kwargs(args))
+                       no_agent=getattr(args, "no_agent", None), **job_kwargs)
     if not result.get("success"):
         print(color(f"Failed to update job: {result.get('error', 'unknown error')}", Colors.RED))
         return 1

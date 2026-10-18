@@ -2071,12 +2071,6 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
             client_kwargs["http_client"] = keepalive_http
     # Retries belong to the outer conversation loop (honors Retry-After); SDK retries would
     # double-retry inside it. auxiliary_client keeps SDK retries as it isn't wrapped.
-    # Delegate all rate-limit / 5xx retry to hermes's outer conversation loop, which honors Retry-After and
-    # applies adaptive/jittered backoff. The OpenAI SDK default (max_retries=2) uses its own 1-2s backoff
-    # that ignores Retry-After and double-retries inside our loop — the same deadlock the Anthropic clients
-    # hit (#26293). This is the single chokepoint every primary OpenAI/aggregator client passes through
-    # (init, switch_model, recovery, restore, request-scoped); auxiliary_client builds its own clients and
-    # keeps SDK retries because it is NOT wrapped by the conversation loop.
     client_kwargs.setdefault("max_retries", 0)
     _ensure_copilot_headers(client_kwargs)
     # All primary construction and recovery paths must identify Hermes to the official Codex
@@ -2089,6 +2083,8 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     # ``process_bootstrap.OpenAI`` is a lazy SDK proxy; resolved at call time so tests can patch it.
     from agent import process_bootstrap
     client = process_bootstrap.OpenAI(**client_kwargs)
+    from agent.job_inference import install_job_request_guard
+    install_job_request_guard(agent, client)
     # Routing proxies name the deployment they served in a response header (#54864).
     from agent.served_model import install_served_model_capture
     install_served_model_capture(agent, client)

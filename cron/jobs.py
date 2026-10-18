@@ -28,10 +28,11 @@ except ImportError:  # pragma: no cover - non-Windows
     msvcrt = None
 from datetime import datetime, timedelta, timezone, UTC
 from pathlib import Path
+from agent.job_inference_policy import UNSET_POLICY, validate_job_inference
 from hermes_constants import get_hermes_home
 from cron.constants import CLAIM_TTL_INACTIVITY_HEADROOM, FIRE_CLAIM_SKEW_SECONDS, FIRE_CLAIM_TTL_SECONDS
 from cron.env_settings import cron_env_setting
-from cron.jobs_invariants import _validate_job_mode_invariants
+from cron.jobs_invariants import _normalize_reasoning_effort, _validate_job_mode_invariants
 from cron.scheduler_ownership import _claim_owner_is_dead
 from cron import store_health
 from typing import Optional, Dict, List, Any, Callable, Set, Tuple, Union, Collection
@@ -1716,27 +1717,6 @@ def _normalize_failure_deliver(value: Any) -> Optional[str]:
     return _normalize_job_optional_text(value)
 
 
-def _normalize_reasoning_effort(value: Any) -> Optional[str]:
-    """Spelling-only validation via the shared parser (cron knob never stricter/looser than
-    config.yaml); model capability is deliberately NOT checked (model unknowable at create time,
-    transports clamp at send time). None for unset, lowercase level, or ValueError."""
-    if value is None:
-        return None
-    text = str(value).strip().lower()
-    if not text:
-        return None
-    from hermes_constants import parse_reasoning_effort
-
-    if parse_reasoning_effort(text) is None:
-        raise ValueError(
-            f"Invalid reasoning_effort {value!r}. Valid levels: "
-            "none, minimal, low, medium, high, xhigh, max, ultra "
-            "(empty string clears the override).")
-    if text in {"false", "disabled"}:
-        return "none"
-    return text
-
-
 # Normalizers for create_job (all fields) / update_job (present fields). Invalid values raise BEFORE
 # storing.
 _CREATE_FIELD_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
@@ -1811,6 +1791,7 @@ def create_job(
     paused_reason: Optional[str] = None,
     pinned: bool = False,
     interpreter: Optional[str] = None,
+    inference_policy=UNSET_POLICY,
 ) -> dict[str, Any]:
     """Create a new cron job and return the stored record.
 
@@ -1913,6 +1894,9 @@ def create_job(
         if value is not None:
             job[key] = value
 
+    if inference_policy is not UNSET_POLICY:
+        job["inference_policy"] = inference_policy
+    job = validate_job_inference(job, allow_clear=True)
     with _jobs_lock():
         save_jobs(load_jobs() + [job])
     return job
@@ -2094,7 +2078,7 @@ def update_job(job_id: str, updates: dict[str, Any]) -> Optional[dict[str, Any]]
         _rederive_repeat_for_schedule_change(job, updates)
         _normalize_job_updates(job, updates)
         _apply_pin_update(job, updates)
-        updated = _apply_skill_fields({**job, **updates})
+        updated = validate_job_inference(_apply_skill_fields({**job, **updates}), allow_clear=True)
         _reject_terminal_activation(job, updated, job_id)
         # Re-check on the MERGED record; scoped to changed fields so legacy records keep loading.
         if {"monitor_script", "monitor_url", "no_agent", "script"}.intersection(updates):

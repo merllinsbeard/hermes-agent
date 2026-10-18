@@ -23,6 +23,7 @@ class _FakeApiError(Exception):
 
 
 class _Agent:
+    job_inference = None
     log_prefix = ""
     verbose = False
     provider = "custom"

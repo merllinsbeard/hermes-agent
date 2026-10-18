@@ -15,6 +15,7 @@
 #
 # Usage:
 #   scripts/run_tests.sh                            # full suite
+#   scripts/run_tests.sh --scratch-root /owned/test-temp  # temp files + cleanup stay here
 #   scripts/run_tests.sh -j 4                       # cap parallelism
 #   scripts/run_tests.sh tests/agent/               # discover only here
 #   scripts/run_tests.sh tests/agent/ tests/acp_adapter/    # multiple roots

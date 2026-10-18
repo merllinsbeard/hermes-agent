@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import logging
 from typing import Any
 
+from agent.job_inference_policy import JobInferenceError
 from agent.message_sanitization import sanitize_outbound_kwargs, strip_images_for_rejecting_model
 from hermes_cli.observability.shared_metrics_efficiency import observe_request_tools
 from utils import env_var_enabled
@@ -86,6 +87,8 @@ def _fire_pre_api_request_hook(
                 middleware_trace=list(_llm_middleware_trace),
                 request=agent._api_request_payload_for_hook(api_kwargs),
             )
+    except JobInferenceError:
+        raise
     except Exception:
         pass
 
@@ -151,6 +154,8 @@ def build_api_request(
         api_kwargs = _llm_request_mw.payload
         _original_api_kwargs = _llm_request_mw.original_payload
         _llm_middleware_trace = _llm_request_mw.trace
+    except JobInferenceError:
+        raise
     except Exception:
         _original_api_kwargs = dict(api_kwargs)
         _llm_middleware_trace = []

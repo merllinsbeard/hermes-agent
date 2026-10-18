@@ -36,6 +36,8 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Union
 # `hermes update`) otherwise fail with ModuleNotFoundError for hermes_time et al.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from agent.job_inference_policy import AgentRolePin, JobInferenceError, read_admitted_inference
+from cron.agent_config import _load_prefill_messages
 from cron.worker_bootstrap import WORKER_MARKER, finish_worker_boot
 from hermes_constants import get_hermes_home, hermes_home_key
 from hermes_cli.observability.shared_metrics_gateway import note_cron_execution, note_cron_skipped
@@ -1632,9 +1634,11 @@ def _load_cron_job_config(job: dict, job_id: str, job_name: str) -> _CronJobConf
     _model_cfg: Any = {}
     try:
         from hermes_cli.config_effective import load_user_config_effective
+        from hermes_cli.runtime_provider import _FROZEN_RUNTIME_CONFIG, load_config
         _cfg_path = str(_get_hermes_home() / "config.yaml")
-        if os.path.exists(_cfg_path):
-            _cfg = load_user_config_effective(Path(_cfg_path))
+        frozen = _FROZEN_RUNTIME_CONFIG.get() if read_admitted_inference(job) is not None else None
+        if frozen is not None or os.path.exists(_cfg_path):
+            _cfg = load_config() if frozen is not None else load_user_config_effective(Path(_cfg_path))
             # Coerce null to {} so a falsy default never clobbers a resolved env value.
             _model_cfg = _cfg.get("model") or {}
             _cron_cfg_for_model = _cfg.get("cron") or {}
@@ -1675,30 +1679,6 @@ def _load_cron_job_config(job: dict, job_id: str, job_name: str) -> _CronJobConf
     return _CronJobConfig(_cfg, model, _model_cfg, _cron_default_provider)
 
 
-def _load_prefill_messages(cfg: dict, job_id: str) -> Optional[list]:
-    """Prefill messages from env or config.yaml (top-level key canonical; agent.* is legacy)."""
-    agent_cfg = cfg.get("agent", {}) if isinstance(cfg.get("agent", {}), dict) else {}
-    prefill_file = (
-        cron_env_setting("HERMES_PREFILL_MESSAGES_FILE")
-        or cfg.get("prefill_messages_file", "")
-        or agent_cfg.get("prefill_messages_file", "")
-    )
-    if not prefill_file:
-        return None
-    pfpath = Path(prefill_file).expanduser()
-    if not pfpath.is_absolute():
-        pfpath = _get_hermes_home() / pfpath
-    if not pfpath.exists():
-        return None
-    try:
-        with open(pfpath, "r", encoding="utf-8-sig") as _pf:
-            prefill_messages = json.load(_pf)
-        return prefill_messages if isinstance(prefill_messages, list) else None
-    except Exception as e:
-        logger.warning("Job '%s': failed to parse prefill messages file '%s': %s", job_id, pfpath, e)
-        return None
-
-
 def _preflight_or_block(job: dict, job_id: str, job_name: str, cfg: dict) -> Optional[tuple]:
     """Pre-dispatch config validation: refuse unrunnable jobs (missing key, unready skill,
     unconfigured delivery) BEFORE AIAgent is built. run_one_job keys off BLOCKED_CONFIG_MARKER to
@@ -1721,6 +1701,8 @@ def _preflight_or_block(job: dict, job_id: str, job_name: str, cfg: dict) -> Opt
                 with contextlib.suppress(Exception):
                     from cron.jobs import clear_preflight_alerted
                     clear_preflight_alerted(job_id)
+    except JobInferenceError:
+        raise
     except Exception:
         # Fail open: the validator must never take down a runnable job.
         logger.debug("Job '%s': preflight validation errored — failing open", job_id, exc_info=True)
@@ -2446,14 +2428,15 @@ class _CronAgentSetup:
     fallback_model: Any = None
     credential_pool: Any = None
     fallback_notice: Optional[str] = None
+    job_inference: AgentRolePin | None = None
 
 
 def _resolve_cron_agent_setup(job: dict, job_id: str, job_name: str, jc) -> _CronAgentSetup:
     """Resolve model/runtime/reasoning/pool for the run, in the original gate order: exfil guard ->
     preflight (may block) -> runtime (+ fallback chain) -> credential pool -> MCP."""
     _cfg = jc.cfg
-    setup = _CronAgentSetup(model=jc.model)
-    setup.prefill_messages = _load_prefill_messages(_cfg, job_id)
+    setup = _CronAgentSetup(model=jc.model, job_inference=read_admitted_inference(job))
+    setup.prefill_messages = _load_prefill_messages(_cfg, job_id, _get_hermes_home())
 
     # resolve_turn_limit() honors none/unlimited (sys.maxsize) and explicit 0 / null.
     from hermes_cli.config import resolve_turn_limit as _resolve_turn_limit
@@ -2478,7 +2461,12 @@ def _resolve_cron_agent_setup(job: dict, job_id: str, job_name: str, jc) -> _Cro
     # Mid-run provider ladder: same rule as resolution above, so a pinned job cannot be swapped
     # onto the global chain by a 5xx/429 either.
     setup.fallback_model = _job_fallback_chain(job, _cfg)
-    setup.credential_pool = _load_credential_pool(setup.runtime, job_id)
+    if setup.job_inference is not None:
+        from agent.job_inference import require_runtime
+        require_runtime(setup.job_inference, setup.runtime)
+        setup.credential_pool = setup.runtime.get("credential_pool")
+    else:
+        setup.credential_pool = _load_credential_pool(setup.runtime, job_id)
     # MCP servers must be registered before AIAgent is constructed.
     _init_cron_mcp_tools(job_id)
     # Only now can a requested MCP toolset be judged: its alias is process-global but its tools live
@@ -2494,7 +2482,8 @@ def _construct_cron_agent(AIAgent, job: dict, _cfg: dict, setup: _CronAgentSetup
     runtime = setup.runtime
     pr = _cfg.get("provider_routing") or {}
     return AIAgent(
-        model=setup.model,
+        model=setup.model, job_inference=setup.job_inference,
+        native_runtime=runtime if setup.job_inference is not None else None,
         api_key=runtime.get("api_key"),
         base_url=runtime.get("base_url"),
         provider=runtime.get("provider"),

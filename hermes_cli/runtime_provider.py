@@ -622,11 +622,16 @@ def _resolve_runtime_from_pool_entry(*, provider: str, entry: PooledCredential, 
                                      model_cfg: Optional[dict[str, Any]] = None, pool: Optional[CredentialPool] = None,
                                      target_model: Optional[str] = None) -> dict[str, Any]:
     model_cfg = model_cfg or _get_model_config()
+    if provider == "custom" and requested_provider.startswith("custom:"):
+        named = _get_named_custom_provider(requested_provider, resolve_credentials=False)
+        if named is not None:
+            model_cfg = {**model_cfg, "provider": "custom", "api_mode": named.get("api_mode")}
     api_mode, base_url = _pool_entry_mode_and_url(provider, entry, model_cfg, _effective_model(model_cfg, target_model),
                                                   _pool_entry_base_url(entry).rstrip("/"))
     base_url = _finalize_base_url(provider, api_mode, base_url)
     return _runtime(provider, api_mode, base_url, _pool_entry_api_key(entry), source=getattr(entry, "source", "pool"),
-                    credential_pool=pool, requested_provider=requested_provider)
+                    credential_pool=pool, credential_pool_entry_id=getattr(entry, "id", None),
+                    requested_provider=requested_provider)
 
 
 def _openrouter_should_use_pool(requested_provider, model_cfg, explicit_api_key, explicit_base_url) -> bool:

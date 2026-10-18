@@ -578,6 +578,38 @@ def test_native_pool_refresh_rotation_and_rebuild_keep_coherent_material(native_
             agent.close()
 
 
+def test_native_codex_account_headers_follow_selected_key_on_rebuild(native_binding):
+    import base64
+    from hermes_cli.runtime_provider import frozen_runtime_config
+    from agent.codex_runtime import run_codex_stream
+    from tests.agent.test_job_inference_wire import built_request
+    env = native_binding
+    env.config["model"]["base_url"] = ENDPOINT
+
+    def key(account):
+        claims = {"https://api.openai.com/auth": {"chatgpt_account_id": account, "chatgpt_data_residency": "synthetic-region"}}
+        encoded = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+        return "synthetic." + encoded + ".signature"
+
+    first, second = key("synthetic-account-A"), key("synthetic-account-B")
+    pool = env.install([("A", first, ENDPOINT, 0), ("B", second, ENDPOINT, 10)])
+    with frozen_runtime_config(env.config):
+        agent, _ = construct_native(authored(base_url=None), env.config)
+        try:
+            run_codex_stream(agent, built_request(agent), client=agent.client)
+            assert agent._swap_credential(pool.entries()[1])
+            client = agent._create_request_openai_client(reason="synthetic-account-rotation")
+            run_codex_stream(agent, built_request(agent), client=client)
+            assert [(r["url"], r["authorization"], r["headers"].get("chatgpt-account-id")) for r in env.sent] == [
+                (ENDPOINT + "/responses", "Bearer " + first, "synthetic-account-A"),
+                (ENDPOINT + "/responses", "Bearer " + second, "synthetic-account-B")]
+            assert all(r["headers"]["originator"] == "hermes-agent" and
+                r["headers"]["x-openai-internal-codex-residency"] == "synthetic-region" and
+                r["headers"]["content-encoding"] == "zstd" for r in env.sent)
+        finally:
+            agent.close()
+
+
 @pytest.mark.parametrize("case", ["implicit", "explicit_same", "explicit_refuse"])
 def test_native_singleton_refresh_preserves_ownership_and_explicit_url(native_binding, monkeypatch, case):
     from hermes_cli import auth, runtime_provider

@@ -373,7 +373,7 @@ def construct_native(job, config):
 
 def test_native_tool_search_assembly_and_dispatch_before_first_send(native_binding, sandbox):
     import model_tools
-    import tools.memory_tool  # noqa: F401
+    import tools.memory_tool
     from tools.registry import registry
     from tools.tool_search import BRIDGE_TOOL_NAMES
     from hermes_cli.runtime_provider import frozen_runtime_config

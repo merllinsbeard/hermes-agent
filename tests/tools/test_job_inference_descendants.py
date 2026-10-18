@@ -5,7 +5,8 @@ import httpx
 from openai import OpenAI
 import pytest
 
-from tests.cron.test_job_inference_policy import ENDPOINT, admitted, authored, construct_native, make_agent, native_binding, sandbox
+from tests.cron.test_job_inference_policy import ENDPOINT, admitted, authored, construct_native, make_agent, sandbox
+from tests.cron.test_job_inference_policy import native_binding as native_binding
 from tests.agent.test_job_inference_wire import response_event, response_stream
 
 
@@ -251,7 +252,9 @@ def test_named_pool_child_adopts_qualified_native_material(native_binding):
             enabled_toolsets=["delegation"]), env.config)
         held = pool.acquire_lease("A")
         try:
-            result = json.loads(registry.dispatch("delegate_task", {"goal": "native named child"}, parent_agent=parent))
+            raw = registry.dispatch("delegate_task", {"goal": "native named child"}, parent_agent=parent)
+            assert isinstance(raw, str)
+            result = json.loads(raw)
             assert result["results"][0]["summary"] == "synthetic-ok"
             assert [(r["url"], r["authorization"], r["body"]["model"], r["body"]["reasoning"]["effort"],
                      r["body"].get("service_tier")) for r in env.sent] == [(

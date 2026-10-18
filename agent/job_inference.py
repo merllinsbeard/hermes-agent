@@ -3,7 +3,36 @@ from __future__ import annotations
 from typing import Any
 import json
 
-from agent.job_inference_policy import JobInferenceError
+from agent.job_inference_policy import AgentRolePin, JobInferenceError
+
+
+def resolve_job_runtime(pin: AgentRolePin, native_runtime: dict[str, Any] | None, *,
+                        provider: Any, model: Any, base_url: Any, api_mode: Any, command: Any) -> dict[str, Any]:
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+    route = pin.route
+    pin.require_route(provider or route.provider, model or route.model, base_url or route.endpoint)
+    if api_mode is not None:
+        pin.require_transport(api_mode)
+    if command:
+        raise JobInferenceError("inference_policy does not support an external process transport")
+    runtime = (dict(native_runtime) if native_runtime is not None else resolve_runtime_provider(
+        requested=route.provider, target_model=route.model, explicit_base_url=route.endpoint))
+    require_runtime(pin, runtime)
+    return runtime
+
+
+def assemble_job_tools(agent: Any, tool_defs: list[dict]) -> list[dict]:
+    from agent.agent_init import config_context_length_for_runtime
+    from agent.model_metadata import get_model_context_length
+    from hermes_cli.runtime_provider import load_config
+    from tools.tool_search import ToolSearchConfig, assemble_tool_defs
+    config = load_config()
+    context_length = get_model_context_length(agent.model, provider=agent.provider,
+        base_url=agent.base_url, api_key=agent.api_key,
+        config_context_length=config_context_length_for_runtime(agent, config))
+    tools_config = config.get("tools")
+    search_config = ToolSearchConfig.from_raw(tools_config.get("tool_search") if isinstance(tools_config, dict) else None)
+    return assemble_tool_defs(tool_defs, context_length=context_length, config=search_config).tool_defs
 
 
 def require_runtime(pin: Any, runtime: dict) -> None:

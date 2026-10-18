@@ -490,7 +490,7 @@ def _try_resolve_from_custom_pool(
                 pool_api_key = "no-key-required"
             return rp._runtime(provider_label, api_mode_override or rp._detect_api_mode_for_url(base_url) or "chat_completions",
                                base_url, pool_api_key, source=f"pool:{pool_key}", credential_pool=pool,
-                               credential_pool_entry_id=entry.id)
+                               credential_pool_entry_id=getattr(entry, "id", None))
         except Exception:
             continue
     return None

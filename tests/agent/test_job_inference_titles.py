@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.cron.test_job_inference_policy import authored, make_agent, sandbox
+from tests.cron.test_job_inference_policy import admitted, make_agent, sandbox
 
 
 def test_native_title_paths_with_positive_interactive_control(tmp_path, monkeypatch):
@@ -20,7 +20,7 @@ def test_native_title_paths_with_positive_interactive_control(tmp_path, monkeypa
 
     monkeypatch.setattr(title_generator, "call_llm", controlled_title_service)
     db = SessionDB(tmp_path / "synthetic-title-state.db")
-    pin = read_admitted_inference(authored())
+    pin = read_admitted_inference(admitted())
     assert pin is not None
     cron = make_agent(job_inference=pin, session_db=db)
     child = make_agent(job_inference=pin.descendant(), platform="subagent", session_db=db)

@@ -232,11 +232,15 @@ def test_owner_cli_create_edit_clear_and_model_tool_shape(monkeypatch):
     assert job["inference_policy"] == POLICY
     edit = parser.parse_args(["cron", "edit", job["id"], "--prompt", "Edited synthetic owner CLI"])
     assert cli.cron_edit(edit) == 0
-    assert get_job(job["id"])["inference_policy"] == POLICY
+    edited = get_job(job["id"])
+    assert edited is not None and edited["inference_policy"] == POLICY
     clear = parser.parse_args(["cron", "edit", job["id"], "--inference-policy", ""])
     assert cli.cron_edit(clear) == 0
-    assert "inference_policy" not in get_job(job["id"])
-    properties = cronjob_tools.CRONJOB_SCHEMA["parameters"]["properties"]
+    cleared = get_job(job["id"])
+    assert cleared is not None and "inference_policy" not in cleared
+    parameters = cronjob_tools.CRONJOB_SCHEMA["parameters"]
+    assert isinstance(parameters, dict)
+    properties = parameters["properties"]
     assert "inference_policy" not in properties and "model" not in properties and "provider" not in properties
     assert "inference_policy" not in cronjob_tools._HANDLER_FORWARDED_ARGS
     rejected = json.loads(cronjob_tools.cronjob(action="create", schedule="every 1h",

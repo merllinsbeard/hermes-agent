@@ -19,7 +19,7 @@ def response_event() -> dict[str, Any]:
 
 def response_stream(event: dict[str, Any] | None = None):
     event = event or response_event()
-    items = [{"type": "response.output_item.done", "output_index": index, "item": item}
+    items: list[dict[str, Any]] = [{"type": "response.output_item.done", "output_index": index, "item": item}
              for index, item in enumerate(event["response"]["output"])]
     return "".join("event: " + frame["type"] + "\ndata: " + json.dumps(frame) + "\n\n"
                    for frame in [*items, event])

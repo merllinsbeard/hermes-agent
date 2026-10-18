@@ -60,9 +60,13 @@ def test_exact_retry_cold_restore_and_compression_keep_admitted_selection(tmp_pa
         assert restored.session_id == sid
         assert runner.adapters[Platform.LOCAL].policies[sid].request_json == frozen.request_json
 
-        db.end_session(sid, "compression")
-        db.create_session("synthetic-tip", source="cron", parent_session_id=sid)
+        db.publish_compression_child(parent_session_id=sid, child_session_id="synthetic-tip", source="cron",
+            messages=[{"role": "user", "content": "Synthetic compressed context"}], require_compression_lease=False)
         authority.sessions.clear()
+        if store._db is not None and store._db is not db:
+            store._db.close()
+        store = SessionStore(tmp_path / "private-sessions", GatewayConfig())
+        runner.session_store = store
         restore_local_session(authority, sid)
         after = local_receipt(db, sid)
         assert after["entry"]["session_id"] == "synthetic-tip"

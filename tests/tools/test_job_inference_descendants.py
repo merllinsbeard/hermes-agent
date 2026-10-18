@@ -6,7 +6,7 @@ from openai import OpenAI
 import pytest
 
 from tests.cron.test_job_inference_policy import ENDPOINT, authored, make_agent, sandbox
-from tests.agent.test_job_inference_wire import response_event
+from tests.agent.test_job_inference_wire import response_event, response_stream
 
 
 def install_transport(monkeypatch, observed, *, gate=None):
@@ -27,7 +27,7 @@ def install_transport(monkeypatch, observed, *, gate=None):
                     "call_id": "synthetic-call", "name": "delegate_task",
                     "arguments": json.dumps({"goal": "synthetic leaf"})}]
             return httpx.Response(200, headers={"content-type": "text/event-stream"},
-                                  content="event: response.completed\ndata: " + json.dumps(event) + "\n\n")
+                                  content=response_stream(event))
         return OpenAI(api_key="synthetic-not-a-credential", base_url=agent.base_url, max_retries=0,
                       http_client=httpx.Client(transport=httpx.MockTransport(send)))
 

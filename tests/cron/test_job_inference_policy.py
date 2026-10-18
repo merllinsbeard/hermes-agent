@@ -7,6 +7,7 @@ from pathlib import Path
 import socket
 import subprocess
 import tempfile
+import traceback
 from types import SimpleNamespace
 
 import pytest
@@ -40,7 +41,7 @@ def sandbox(tmp_path, monkeypatch):
     unhandled = []
 
     def refuse(*args, **kwargs):
-        unhandled.append("uncontrolled I/O")
+        unhandled.append([(frame.filename, frame.lineno, frame.name) for frame in traceback.extract_stack()[:-1]])
         raise AssertionError("uncontrolled network or subprocess in synthetic job test")
 
     monkeypatch.setattr(socket.socket, "connect", refuse)
@@ -69,6 +70,7 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setattr(tool_registry, "discover_builtin_tools", lambda *a: [])
     from hermes_cli import plugins
     manager = plugins.PluginManager()
+    monkeypatch.setattr(plugins, "get_plugin_manager", lambda: manager)
     monkeypatch.setattr(plugins, "_plugin_manager", manager)
     monkeypatch.setattr(plugins, "_plugin_managers_by_home", {})
     monkeypatch.setattr(plugins, "discover_plugins", lambda *a, **k: None)

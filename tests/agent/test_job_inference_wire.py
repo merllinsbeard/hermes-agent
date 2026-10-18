@@ -16,12 +16,20 @@ def response_event():
         "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3}}}
 
 
+def response_stream(event=None):
+    event = event or response_event()
+    items = [{"type": "response.output_item.done", "output_index": index, "item": item}
+             for index, item in enumerate(event["response"]["output"])]
+    return "".join("event: " + frame["type"] + "\ndata: " + json.dumps(frame) + "\n\n"
+                   for frame in [*items, event])
+
+
 def controlled_client(sent, *, endpoint=ENDPOINT, failure=None):
     def send(request):
         sent.append({"url": str(request.url), "body": json.loads(request.content)})
         if failure is not None:
             return failure(request, len(sent))
-        data = "event: response.completed\ndata: " + json.dumps(response_event()) + "\n\n"
+        data = response_stream()
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=data)
     return OpenAI(api_key="synthetic-not-a-credential", base_url=endpoint, max_retries=0,
                   http_client=httpx.Client(transport=httpx.MockTransport(send)))
@@ -94,6 +102,7 @@ def test_actual_runtime_route_is_checked(mutation):
     from agent.job_inference_policy import read_admitted_inference, JobInferenceError
     from agent.codex_runtime import run_codex_stream
     agent = make_agent(job_inference=read_admitted_inference(authored()))
+    request = built_request(agent)
     sent = []
     endpoint = "https://different.example.invalid/v1" if mutation == "endpoint" else ENDPOINT
     if mutation == "provider":
@@ -103,7 +112,7 @@ def test_actual_runtime_route_is_checked(mutation):
     with controlled_client(sent, endpoint=endpoint) as client:
         try:
             with pytest.raises(JobInferenceError):
-                run_codex_stream(agent, built_request(agent), client=client)
+                run_codex_stream(agent, request, client=client)
             assert sent == []
         finally:
             agent.close()
@@ -134,7 +143,7 @@ def test_physical_stream_retry_checks_the_same_selection():
     def failure(request, attempt):
         if attempt == 1:
             raise httpx.ConnectError("synthetic disconnect", request=request)
-        data = "event: response.completed\ndata: " + json.dumps(response_event()) + "\n\n"
+        data = response_stream()
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=data)
     agent = make_agent(job_inference=read_admitted_inference(authored()))
     sent = []
@@ -156,6 +165,8 @@ def test_request_middleware_and_policy_errors_fail_closed(request):
     from hermes_cli.middleware import apply_llm_request_middleware, run_llm_execution_middleware
 
     def build(agent):
+        from agent.turn_context import _reset_per_turn_agent_state
+        _reset_per_turn_agent_state(agent)
         messages = [{"role": "user", "content": "Synthetic request middleware"}]
         return build_api_request(agent, api_messages=messages, _moa_prepared_request=None,
             tools_for_api=agent.tools, system_message="Synthetic", messages=messages,
@@ -194,10 +205,10 @@ def test_reasoning_recovery_cannot_drop_or_floor_an_opted_effort(monkeypatch):
     from agent.turn_retry_state import TurnRetryState
     from openai import BadRequestError
 
-    error = BadRequestError("Synthetic reasoning refusal", response=httpx.Response(400,
+    error = BadRequestError("Error code: 400 - {'error': {'param': 'reasoning.effort', "
+        "'error_code': 'invalid_reasoning_effort', 'retryable': False}}", response=httpx.Response(400,
         request=httpx.Request("POST", ENDPOINT + "/responses")), body={"error": {
             "param": "reasoning.effort", "error_code": "invalid_reasoning_effort", "retryable": False}})
-    error.message = "Error code: 400 - {'error': {'param': 'reasoning.effort', 'error_code': 'invalid_reasoning_effort', 'retryable': False}}"
     monkeypatch.setattr("hermes_cli.models_reasoning_caps.refresh_reasoning_caps_async", lambda provider: None)
     for opted in (True, False):
         agent = make_agent(job_inference=read_admitted_inference(authored()) if opted else None,

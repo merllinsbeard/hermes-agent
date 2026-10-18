@@ -6,8 +6,10 @@ from openai import OpenAI
 import pytest
 
 from tests.cron.test_job_inference_policy import ENDPOINT, admitted, authored, construct_native, make_agent, sandbox
-from tests.cron.test_job_inference_policy import native_binding as native_binding
+from tests.cron.test_job_inference_policy import native_binding
 from tests.agent.test_job_inference_wire import response_event, response_stream
+
+__all__ = ["native_binding", "sandbox"]
 
 
 def install_transport(monkeypatch, observed, *, gate=None):

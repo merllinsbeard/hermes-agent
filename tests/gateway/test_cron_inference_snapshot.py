@@ -8,7 +8,9 @@ import pytest
 
 from tests.cron.test_job_inference_policy import POLICY, authored
 from tests.cron.test_job_inference_policy import sandbox
-from tests.cron.test_job_inference_policy import native_binding as native_binding
+from tests.cron.test_job_inference_policy import native_binding
+
+__all__ = ["native_binding", "sandbox"]
 
 
 def test_native_admission_cron_consumer_uses_profile_proxy(tmp_path, monkeypatch, request):

@@ -3,15 +3,30 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import socket
 import subprocess
+import tempfile
 from types import SimpleNamespace
 
 import pytest
 
 POLICY = {"delegation_reasoning_effort": "high", "service_tier": "default"}
 ENDPOINT = "https://chatgpt.com/backend-api/codex"
+
+
+def pytest_load_initial_conftests(early_config):
+    if not early_config.known_args_namespace.noconftest:
+        return
+    if not early_config.known_args_namespace.disable_plugin_autoload:
+        raise pytest.UsageError("isolated policy tests require --disable-plugin-autoload")
+    if any(name.startswith("HERMES_SESSION_") for name in os.environ):
+        raise pytest.UsageError("isolated policy tests cannot inherit HERMES_SESSION_* names")
+    home = tempfile.mkdtemp(prefix="synthetic-hermes-", dir=os.environ["TMPDIR"])
+    os.environ["HERMES_HOME"] = os.environ["HERMES_TEST_ISOLATION"] = home
+    os.environ["HERMES_DISABLE_LAZY_INSTALLS"] = "1"
+    os.environ["HERMES_RUNTIME_DIR"] = str(Path(home) / "no-pm-store")
 
 
 @pytest.fixture(autouse=True)

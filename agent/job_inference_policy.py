@@ -60,16 +60,16 @@ class PinnedRoute:
     endpoint: str
 
 
-def _route(provider: Any, model: Any, endpoint: Any, config: dict) -> PinnedRoute:
-    from gateway.session_route_identity import resolved_route
+def _route(provider: Any, model: Any, endpoint: Any) -> PinnedRoute:
     from hermes_cli.model_normalize import normalize_model_for_provider
+    from hermes_cli.models import normalize_provider
     from hermes_cli.route_identity import normalize_route_base_url
     from agent.model_metadata import strip_codex_context_variant_suffix
 
-    identity, url = resolved_route({"provider": _text(provider, "provider"), "base_url": endpoint}, config)
+    identity = normalize_provider(_text(provider, "provider"))
     if identity == "auto":
         raise JobInferenceError("inference_policy does not allow provider auto")
-    url = normalize_route_base_url(url)
+    url = normalize_route_base_url(endpoint)
     try:
         parsed = urlsplit(url)
         hostname = parsed.hostname
@@ -94,7 +94,7 @@ def normalize_admitted_job(job: Mapping[str, Any], *, provider_defaults: dict) -
     if not endpoint:
         definition = get_provider(identity, allow_network=False)
         endpoint = definition.base_url if definition is not None else ""
-    route = _route(identity, result["model"], endpoint, provider_defaults)
+    route = _route(identity, result["model"], endpoint)
     result.update(provider=route.provider, model=route.model, base_url=route.endpoint)
     return result
 
@@ -118,7 +118,7 @@ class AgentRolePin:
         return parse_reasoning_effort(self.effort)
 
     def require_route(self, provider: Any, model: Any, endpoint: Any) -> None:
-        if _route(provider, model, endpoint, {}) != self.route:
+        if _route(provider, model, endpoint) != self.route:
             raise JobInferenceError("inference_policy route changed; refusing inference")
 
     def require_transport(self, api_mode: str) -> None:
@@ -132,6 +132,6 @@ def read_admitted_inference(job: Mapping[str, Any]) -> AgentRolePin | None:
     if "inference_policy" not in validated:
         return None
     return AgentRolePin(
-        _route(validated["provider"], validated["model"], validated.get("base_url"), {}),
+        _route(validated["provider"], validated["model"], validated.get("base_url")),
         validated["reasoning_effort"], validated["inference_policy"]["delegation_reasoning_effort"],
     )

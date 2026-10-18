@@ -165,6 +165,20 @@ def test_receipt_parser_is_strict_and_detached():
     assert read_admitted_inference({"model": "legacy"}) is None
 
 
+def test_frozen_named_route_does_not_consult_later_profile(monkeypatch):
+    from agent.job_inference_policy import normalize_admitted_job, read_admitted_inference, JobInferenceError
+    endpoint = "https://synthetic.example.invalid/v1"
+    frozen = normalize_admitted_job(authored(provider="custom:synthetic", base_url=endpoint), provider_defaults={
+        "providers": {"synthetic": {"base_url": endpoint, "models": ["gpt-6.1-sol"]}}})
+    monkeypatch.setattr("hermes_cli.config.load_config", lambda **kw: pytest.fail("frozen route read current profile"))
+    pin = read_admitted_inference(frozen)
+    assert (pin.route.provider, pin.route.model, pin.route.endpoint) == ("custom:synthetic", "gpt-6.1-sol", endpoint)
+    pin.require_route("custom:synthetic", "gpt-6.1-sol", endpoint + "/")
+    for provider in ("auto", "custom", "openai-codex"):
+        with pytest.raises(JobInferenceError):
+            pin.require_route(provider, "gpt-6.1-sol", endpoint)
+
+
 def make_agent(**changes):
     from run_agent import AIAgent
     options = dict(api_key="synthetic-not-a-credential", base_url=ENDPOINT, provider="openai-codex",

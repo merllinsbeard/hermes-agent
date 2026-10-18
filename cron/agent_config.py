@@ -8,7 +8,7 @@ from cron.env_settings import cron_env_setting
 logger = logging.getLogger("cron.scheduler")
 
 
-def load_prefill_messages(cfg: dict, job_id: str, hermes_home: Path) -> Optional[list]:
+def _load_prefill_messages(cfg: dict, job_id: str, hermes_home: Path) -> Optional[list]:
     """Prefill messages from env or config.yaml (top-level key canonical; agent.* is legacy)."""
     agent_cfg = cfg.get("agent", {}) if isinstance(cfg.get("agent", {}), dict) else {}
     prefill_file = (

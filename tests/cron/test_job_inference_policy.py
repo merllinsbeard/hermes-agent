@@ -51,7 +51,7 @@ def sandbox(tmp_path, monkeypatch):
     import hermes_cli._early_recovery as recovery
     from pm import environments
     monkeypatch.setattr(sync, "prepare_launch", lambda *a, **k: None)
-    monkeypatch.setattr(recovery, "restore_interrupted_pull", lambda: False)
+    monkeypatch.setattr(recovery, "restore_interrupted_pull", lambda *a: False)
     monkeypatch.setattr(recovery, "recover_if_needed", lambda *a: None)
     monkeypatch.setattr(environments, "activate_dependencies", lambda *a: None)
     from hermes_cli import version_info
@@ -214,7 +214,7 @@ def test_owner_cli_create_edit_clear_and_model_tool_shape(monkeypatch):
         "--model", "gpt-6.1-sol", "--provider", "openai-codex", "--reasoning-effort", "xhigh",
         "--inference-policy", json.dumps(POLICY)])
     assert cli.cron_create(create) == 0
-    job = list_jobs()[0]
+    job = list_jobs(include_disabled=True)[0]
     assert job["inference_policy"] == POLICY
     edit = parser.parse_args(["cron", "edit", job["id"], "--prompt", "Edited synthetic owner CLI"])
     assert cli.cron_edit(edit) == 0
@@ -228,20 +228,20 @@ def test_owner_cli_create_edit_clear_and_model_tool_shape(monkeypatch):
     rejected = json.loads(cronjob_tools.cronjob(action="create", schedule="every 1h",
         prompt="Invalid synthetic owner API", inference_policy=None))
     assert rejected["success"] is False
-    assert len(list_jobs()) == 1
+    assert len(list_jobs(include_disabled=True)) == 1
 
 
 def test_cron_constructor_and_native_prefill_stay_profile_scoped(sandbox):
     from run_agent import AIAgent
     from cron.scheduler import _CronAgentSetup, _construct_cron_agent
-    from cron.agent_config import load_prefill_messages
+    from cron.agent_config import _load_prefill_messages
     from agent.job_inference_policy import read_admitted_inference
     from agent.codex_runtime import run_codex_stream
     from tests.agent.test_job_inference_wire import built_request, controlled_client
     job = authored(enabled_toolsets=[])
     pin = read_admitted_inference(job)
     (sandbox.home / "synthetic-prefill.json").write_text('[{"role":"user","content":"Synthetic prefill"}]')
-    assert load_prefill_messages({"prefill_messages_file": "synthetic-prefill.json"}, "synthetic", sandbox.home) == [
+    assert _load_prefill_messages({"prefill_messages_file": "synthetic-prefill.json"}, "synthetic", sandbox.home) == [
         {"role": "user", "content": "Synthetic prefill"}]
     setup = _CronAgentSetup(model="gpt-6.1-sol", job_inference=pin, runtime={
         "provider": "openai-codex", "base_url": ENDPOINT, "api_mode": "codex_responses",

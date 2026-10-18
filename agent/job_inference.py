@@ -17,6 +17,11 @@ def require_job_agent(agent: Any, client: Any = None) -> None:
         pin.require_route(agent.provider, agent.model, str(client.base_url))
 
 
+def refuse_effort_recovery(agent: Any, error: Exception) -> None:
+    if getattr(agent, "job_inference", None) is not None:
+        raise JobInferenceError("inference_policy refuses reasoning recovery that changes effort") from error
+
+
 def guard_codex_request(agent: Any, client: Any, request: dict) -> None:
     pin = getattr(agent, "job_inference", None)
     if pin is None:

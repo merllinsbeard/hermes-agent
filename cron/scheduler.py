@@ -37,7 +37,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Union
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agent.job_inference_policy import AgentRolePin, JobInferenceError, read_admitted_inference
-from cron.agent_config import load_prefill_messages
+from cron.agent_config import _load_prefill_messages
 from cron.worker_bootstrap import WORKER_MARKER, finish_worker_boot
 from hermes_constants import get_hermes_home, hermes_home_key
 from hermes_cli.observability.shared_metrics_gateway import note_cron_execution, note_cron_skipped
@@ -2434,7 +2434,7 @@ def _resolve_cron_agent_setup(job: dict, job_id: str, job_name: str, jc) -> _Cro
     preflight (may block) -> runtime (+ fallback chain) -> credential pool -> MCP."""
     _cfg = jc.cfg
     setup = _CronAgentSetup(model=jc.model, job_inference=read_admitted_inference(job))
-    setup.prefill_messages = load_prefill_messages(_cfg, job_id, _get_hermes_home())
+    setup.prefill_messages = _load_prefill_messages(_cfg, job_id, _get_hermes_home())
 
     # resolve_turn_limit() honors none/unlimited (sys.maxsize) and explicit 0 / null.
     from hermes_cli.config import resolve_turn_limit as _resolve_turn_limit

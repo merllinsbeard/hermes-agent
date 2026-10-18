@@ -4,7 +4,8 @@ import httpx
 from openai import OpenAI
 import pytest
 
-from tests.cron.test_job_inference_policy import ENDPOINT, authored, make_agent, sandbox
+from tests.cron.test_job_inference_policy import ENDPOINT, authored, make_agent
+from tests.cron.test_job_inference_policy import sandbox
 
 
 def response_event():
@@ -70,11 +71,12 @@ def test_final_request_override_refuses_before_send(override):
             agent.close()
 
 
-def test_native_execution_middleware_cannot_replace_model(sandbox):
+def test_native_execution_middleware_cannot_replace_model(request):
+    manager = request.getfixturevalue("sandbox").manager
     from agent.job_inference_policy import read_admitted_inference, JobInferenceError
     from agent.codex_runtime import run_codex_stream
     from hermes_cli.middleware import run_llm_execution_middleware
-    sandbox.manager._middleware["llm_execution"] = [
+    manager._middleware["llm_execution"] = [
         lambda request, next_call, **kw: next_call({**request, "extra_body": {"model": "middleware-other"}})]
     agent = make_agent(job_inference=read_admitted_inference(authored()))
     sent = []
@@ -146,7 +148,8 @@ def test_physical_stream_retry_checks_the_same_selection():
             agent.close()
 
 
-def test_request_middleware_and_policy_errors_fail_closed(sandbox):
+def test_request_middleware_and_policy_errors_fail_closed(request):
+    manager = request.getfixturevalue("sandbox").manager
     from agent.job_inference_policy import read_admitted_inference, JobInferenceError
     from agent.codex_runtime import run_codex_stream
     from agent.turn_api_request import build_api_request
@@ -163,7 +166,7 @@ def test_request_middleware_and_policy_errors_fail_closed(sandbox):
     agent = make_agent(job_inference=read_admitted_inference(authored()))
     sent = []
     try:
-        sandbox.manager._middleware["llm_request"] = [lambda request, **kw: {"request": {**request, "model": "middleware-other"}}]
+        manager._middleware["llm_request"] = [lambda request, **kw: {"request": {**request, "model": "middleware-other"}}]
         request = build(agent).api_kwargs
         with controlled_client(sent) as client:
             with pytest.raises(JobInferenceError):
@@ -172,12 +175,12 @@ def test_request_middleware_and_policy_errors_fail_closed(sandbox):
 
         def refuse(**kwargs):
             raise JobInferenceError("synthetic policy refusal")
-        sandbox.manager._middleware["llm_request"] = [refuse]
+        manager._middleware["llm_request"] = [refuse]
         with pytest.raises(JobInferenceError, match="synthetic policy refusal"):
             apply_llm_request_middleware({"model": "gpt-6.1-sol"})
         with pytest.raises(JobInferenceError, match="synthetic policy refusal"):
             build(agent)
-        sandbox.manager._middleware["llm_execution"] = [refuse]
+        manager._middleware["llm_execution"] = [refuse]
         with pytest.raises(JobInferenceError, match="synthetic policy refusal"):
             run_llm_execution_middleware({}, lambda request: pytest.fail("policy error was swallowed"))
     finally:

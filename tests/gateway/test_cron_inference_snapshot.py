@@ -5,10 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.cron.test_job_inference_policy import POLICY, authored, sandbox
+from tests.cron.test_job_inference_policy import POLICY, authored
+from tests.cron.test_job_inference_policy import sandbox
 
 
-def test_exact_retry_cold_restore_and_compression_keep_admitted_selection(tmp_path, monkeypatch, sandbox):
+def test_exact_retry_cold_restore_and_compression_keep_admitted_selection(tmp_path, monkeypatch, request):
+    scope = request.getfixturevalue("sandbox")
     from cron.jobs import create_job, update_job
     from gateway import run, session_cron
     from gateway.config import GatewayConfig, Platform
@@ -28,11 +30,11 @@ def test_exact_retry_cold_restore_and_compression_keep_admitted_selection(tmp_pa
     db = SessionDB(tmp_path / "private-state.db")
     store = SessionStore(tmp_path / "private-sessions", GatewayConfig())
     runner = SimpleNamespace(_draining=False, session_store=store, adapters={})
-    authority = SessionAuthority(runner, profile_id=str(sandbox.home), instance_id="synthetic-owner", db=db,
+    authority = SessionAuthority(runner, profile_id=str(scope.home), instance_id="synthetic-owner", db=db,
                                  epoch=begin_runtime_epoch(db, instance_id="synthetic-owner"))
     runner.session_authority = authority
     monkeypatch.setattr(authority, "_schedule", lambda ref: None)
-    actor = Principal("synthetic-human", str(sandbox.home), frozenset({"session:create", "session:submit", "session:control"}), "test")
+    actor = Principal("synthetic-human", str(scope.home), frozenset({"session:create", "session:submit", "session:control"}), "test")
     params = {"job_id": job["id"], "request_id": "synthetic-fire", "extra_prompt": "synthetic"}
 
     async def admit_and_retry():

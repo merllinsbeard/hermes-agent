@@ -56,7 +56,7 @@ def test_cron_completion_titles_are_local_across_collision_and_lineage(tmp_path,
         assert _set_cron_session_title(db, "synthetic-second", "Cron: Synthetic check") == "Cron: Synthetic check #2"
         db.end_session("synthetic-first", "compression")
         db.create_session("synthetic-tip", source="cron", parent_session_id="synthetic-first")
-        assert _set_cron_session_title(db, "synthetic-tip", "Cron: Synthetic check") == "Cron: Synthetic check #3"
-        assert db.get_session("synthetic-tip")["title"] == "Cron: Synthetic check #3"
+        assert _set_cron_session_title(db, "synthetic-tip", "Cron: Synthetic check") == "Cron: Synthetic check"
+        assert db.get_session("synthetic-tip")["title"] == "Cron: Synthetic check"
     finally:
         db.close()

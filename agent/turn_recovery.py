@@ -707,9 +707,8 @@ def recover_after_classification(
         classified.reason == FailoverReason.reasoning_mandatory
         and not _retry.reasoning_mandatory_retry_attempted
     ):
-        if getattr(agent, "job_inference", None) is not None:
-            from agent.job_inference_policy import JobInferenceError
-            raise JobInferenceError("inference_policy refuses reasoning recovery that changes effort") from api_error
+        from agent.job_inference import refuse_effort_recovery
+        refuse_effort_recovery(agent, api_error)
         _retry.reasoning_mandatory_retry_attempted = True
         sent = getattr(agent, "_wire_reasoning_config", None)
         if isinstance(sent, dict) and sent.get("enabled") is not False and sent.get("effort") not in (None, "none"):

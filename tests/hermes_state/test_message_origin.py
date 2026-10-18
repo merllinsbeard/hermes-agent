@@ -188,3 +188,55 @@ def test_different_supplied_origin_is_not_silently_adopted_as_kept_prefix(db):
         row["origin_statements"] == origin("unknown")
         for row in db.get_messages("s", include_inactive=True)
     )
+
+
+@pytest.mark.parametrize("boundary", ["final_override", "db_only_override"])
+def test_fold_reanchor_override_and_native_flush_keep_both_contributor_claims(db, boundary):
+    from agent.agent_runtime_helpers import _merge_consecutive_users
+    from agent.session_persistence import SessionPersistenceMixin
+    from agent.turn_context_compaction import _reanchor
+    from agent.turn_finalizer import _close_transcript_tail
+
+    earlier, current = origin(), origin("provider_record")
+    current["contributors"][0]["refs"] = [{"kind": "host_row", "value": "row-B"}]
+    current["contributors"][0]["times"][0]["literal"] = "2026-10-17T09:10:11.123456+07:00"
+    current["contributors"][0]["times"][0]["encoding"] = "rfc3339"
+    expected = copy.deepcopy(earlier["contributors"] + current["contributors"])
+    api_text, clean_text = "[API-only guidance] Current request", "Current request"
+    prefix = "Unanswered earlier request"
+    messages = [
+        {"role": "assistant", "content": "Previous reply", "timestamp": 0},
+        {"role": "user", "content": prefix, "timestamp": 0,
+         "message_uid": "row-A", "origin_statements": earlier},
+        {"role": "user", "content": api_text, "timestamp": 7,
+         "message_uid": "row-B", "origin_statements": current},
+    ]
+    agent = SessionPersistenceMixin()
+    agent._session_db, agent._session_db_created, agent.session_id = db, True, "s"
+    agent._persist_user_message_idx = 2
+    agent._persist_user_message_override = clean_text
+    agent._persist_user_message_timestamp = 7
+    agent._persist_user_origin_statements = copy.deepcopy(current)
+    folded, repairs = _merge_consecutive_users(messages)
+    assert repairs == 1 and len(folded) == 2
+    assert folded[1]["origin_statements"]["contributors"] == expected
+    assert _reanchor(agent, folded, api_text) == 1
+    assert agent._persist_user_message_idx == 1
+    if boundary == "final_override":
+        # The real finalizer seam invokes the native override, twice to prove
+        # replay/idempotency cannot drop the absorbed contributor either.
+        _close_transcript_tail(agent, folded, None, False, False)
+        _close_transcript_tail(agent, folded, None, False, False)
+    else:
+        assert folded[1]["content"] == prefix + "\n\n" + api_text
+    assert agent._flush_messages_to_session_db(folded) is True
+    stored = db.get_messages_as_conversation("s")
+    assert stored[1]["content"] == prefix + "\n\n" + clean_text
+    assert stored[1]["origin_statements"]["contributors"] == expected
+    assert len(stored[1]["origin_statements"]["contributors"]) == 2
+    assert folded[1]["origin_statements"]["contributors"] == expected
+    if boundary == "db_only_override":
+        assert folded[1]["content"] == prefix + "\n\n" + api_text
+    assert agent._flush_messages_to_session_db(folded) is True
+    assert len(db.get_messages("s")) == 2
+    assert db.get_messages_as_conversation("s")[1]["origin_statements"]["contributors"] == expected

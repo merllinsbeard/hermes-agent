@@ -26,6 +26,7 @@ from agent.trajectory import save_trajectory as _save_trajectory_to_file
 from agent.message_metadata import (
     DB_ROW_SNAPSHOT, MERGED_TURN_PREFIX, REPAIR_BOOKKEEPING_FIELDS, TOOL_CALL_UID, copy_identity_fields,
     tool_call_uid_from_history)
+from agent.message_origin import merge_origins
 from agent.transcript_repair import sync_flushed_message_markers
 
 
@@ -247,6 +248,10 @@ def _db_flush_row(agent, msg: dict, is_current_turn_user: bool) -> dict[str, Any
     # The merge witness rides on the survivor's row (an owned column: a row-addressed rewrite of the
     # survivor writes it too), so a restart sees which rows the composite folded.
     copy_identity_fields(msg, row)
+    if is_current_turn_user and role == "user" and (origin := merge_origins(
+        row.get("origin_statements"), getattr(agent, "_persist_user_origin_statements", None),
+    )) is not None:
+        row["origin_statements"] = origin
     if isinstance(msg.get(DB_ROW_SNAPSHOT), str):
         row[DB_ROW_SNAPSHOT] = msg[DB_ROW_SNAPSHOT]
     return row
@@ -435,8 +440,9 @@ class SessionPersistenceMixin:
         if _override_replaces_content(msg, msg.get("content"), override):
             msg["content"] = _content_with_turn_override(msg, msg.get("content"), override)
         if origin is not None:
-            from agent.message_origin import origin_copy
-            msg["origin_statements"] = origin_copy(origin)
+            # The staged current-turn snapshot predates host folds: retain the
+            # survivor's other contributors along with the clean content override.
+            msg["origin_statements"] = merge_origins(msg.get("origin_statements"), origin)
         if timestamp is not None:
             msg["timestamp"] = timestamp
         if platform_id is not None:  # load-bearing for restart drain-window recovery dedup (has_platform_message_id)

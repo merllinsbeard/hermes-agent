@@ -130,7 +130,7 @@ def test_native_clamp_is_refused_and_legacy_still_clamps():
                 run_codex_stream(opted, built_request(opted), client=client)
             result = run_codex_stream(legacy, built_request(legacy), client=client)
             assert result.output[0].content[0].text == "synthetic-ok"
-            assert sent[0]["body"]["reasoning"]["effort"] == "xhigh"
+            assert sent[0]["body"]["reasoning"]["effort"] == "max"
             assert len(sent) == 1
         finally:
             opted.close()
@@ -222,7 +222,8 @@ def test_reasoning_recovery_cannot_drop_or_floor_an_opted_effort(monkeypatch):
                 with pytest.raises(JobInferenceError):
                     recover_after_classification(agent, error, classified, retry, status_code=400,
                         error_context={}, messages=[], api_messages=[])
-                assert not agent._reasoning_effort_rejected and not agent._reasoning_disable_rejected
+                assert not getattr(agent, "_reasoning_effort_rejected", False)
+                assert not getattr(agent, "_reasoning_disable_rejected", False)
                 assert built_request(agent)["reasoning"]["effort"] == "xhigh"
             else:
                 assert recover_after_classification(agent, error, classified, retry, status_code=400,

@@ -41,7 +41,8 @@ def sandbox(tmp_path, monkeypatch):
     unhandled = []
 
     def refuse(*args, **kwargs):
-        unhandled.append([(frame.filename, frame.lineno, frame.name) for frame in traceback.extract_stack()[:-1]])
+        unhandled.append(" > ".join(f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}"
+                                    for frame in traceback.extract_stack()[-15:-1]))
         raise AssertionError("uncontrolled network or subprocess in synthetic job test")
 
     monkeypatch.setattr(socket.socket, "connect", refuse)
@@ -88,7 +89,7 @@ def sandbox(tmp_path, monkeypatch):
     from cron import jobs
     assert Path(jobs.__file__).resolve().parents[1] == Path(__file__).resolve().parents[2]
     yield SimpleNamespace(home=home, manager=manager)
-    assert unhandled == []
+    assert unhandled == [], "\n".join(unhandled)
 
 
 def authored(**changes):

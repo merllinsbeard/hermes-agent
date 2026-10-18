@@ -81,7 +81,8 @@ def test_background_pin_survives_scope_beside_legacy_agent(monkeypatch):
         clear_session_vars(tokens)
         tokens = []
         parent.job_inference = None
-        legacy = make_agent(reasoning_config={"enabled": True, "effort": "low"}, service_tier="priority")
+        legacy = make_agent(reasoning_config={"enabled": True, "effort": "low"}, service_tier="priority",
+                            request_overrides={"service_tier": "priority"})
         sent = []
         with controlled_client(sent) as client:
             result = run_codex_stream(legacy, built_request(legacy), client=client)
@@ -123,7 +124,7 @@ def test_public_lifecycle_uses_the_common_child_pin(monkeypatch):
             service.launch({"goal": "Synthetic conflict", "provider": "custom", "model": parent.model})
         handle = service.launch({"goal": "Synthetic public lifecycle"})
         assert service.wait(handle, timeout_seconds=20).completed
-        result = service.collect(handle)
+        result = service.result(handle)
         assert result.terminal_state == SubagentState.SUCCEEDED and result.summary == "synthetic-ok"
         assert observed == [(1, "gpt-6.1-sol", "openai-codex", "high", None)]
     finally:

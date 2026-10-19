@@ -26,22 +26,11 @@ on:
         type: string
         required: false
         default: ''
-  workflow_dispatch:
-    inputs:
-      commit:
-        description: Commit to test. Empty keeps the dispatched ref.
-        type: string
-        default: ''
-      paths:
-        description: Space-separated test paths for scripts/run_tests.sh. Empty runs the full suite.
-        type: string
-        default: ''
-      e2e:
-        type: boolean
-        default: false
-      e2e_upgrade:
-        type: boolean
-        default: false
+  # This branch only: the fork has no registered workflows, so workflow_dispatch
+  # cannot reach this file; a push to the branch runs the test job on the
+  # guard-boundary commit and its affected files below. The e2e lanes stay off.
+  push:
+    branches: [ci/guard-boundary-tests]
 
 permissions:
   contents: read
@@ -69,7 +58,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:
-          ref: ${{ inputs.commit }}
+          ref: ${{ github.event_name == 'push' && 'ca7e0f7b02c8c7434c1772f8a3887341fa5d8fe9' || inputs.commit }}
 
       - name: Install ripgrep (prebuilt binary)
         run: |
@@ -138,7 +127,7 @@ jobs:
         run: |
           scripts/run_tests.sh $HERMES_TEST_PATHS
         env:
-          HERMES_TEST_PATHS: ${{ inputs.paths }}
+          HERMES_TEST_PATHS: ${{ github.event_name == 'push' && 'tests/agent/test_tool_guardrails.py tests/agent/test_tool_call_guardrail_runtime.py tests/agent/test_agent_guardrails.py tests/agent/test_read_dedup_rewrite_boundaries.py tests/agent/test_context_compressor_tail.py tests/agent/test_codex_app_server_compaction.py tests/agent/test_proactive_prune_loop_wiring.py tests/agent/test_micro_compaction.py tests/agent/test_ghost_skill_pruning.py tests/tools/test_skill_view_dedup.py tests/tools/test_computer_use_screenshot_dedup.py' || '' }}
           HERMES_TEST_SLICE: ${{ matrix.slice }}/2
           HERMES_TEST_WORKERS: 4
           HERMES_TEST_FILE_TIMEOUT: 600

@@ -26,6 +26,22 @@ on:
         type: string
         required: false
         default: ''
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Commit to test. Empty keeps the dispatched ref.
+        type: string
+        default: ''
+      paths:
+        description: Space-separated test paths for scripts/run_tests.sh. Empty runs the full suite.
+        type: string
+        default: ''
+      e2e:
+        type: boolean
+        default: false
+      e2e_upgrade:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,7 +59,7 @@ jobs:
     # scale linearly. run_tests_parallel.py partitions from the checkout alone, so
     # both slices agree on the split without a planning job.
     name: Run tests (${{ matrix.slice }}/2)
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -51,7 +67,7 @@ jobs:
         slice: [1, 2]
     steps:
       - name: Checkout code
-        uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a  # v1
+        uses: actions/checkout@f548e57e544e1ff5a4c46bf1e1b8685f8e4a348a # v7.0.1
         with:
           ref: ${{ inputs.commit }}
 
@@ -85,6 +101,16 @@ jobs:
         run: |
           "$HERMES_PYTHON" -c "import sqlite3, sys, hermes_state_wal as w; v = w.is_sqlite_wal_reset_vulnerable(); print(f'Python {sys.version.split()[0]}, SQLite {sqlite3.sqlite_version}, WAL-reset vulnerable: {v}'); sys.exit(1 if v else 0)"
 
+      - name: Record the tested source, runtime, dependencies and runner
+        run: |
+          git log -1 --format='tested commit %H, parents %P, tree %T'
+          git show --stat --format= HEAD
+          sha256sum uv.lock pm/lock.json
+          find "$HERMES_HOME" -path '*/workspace/uv.lock' -exec sha256sum {} +
+          "$HERMES_PYTHON" -c "import sys, platform, sqlite3; print(sys.executable, sys.prefix); print(sys.version); print(platform.platform(), platform.machine(), 'sqlite', sqlite3.sqlite_version)"
+          "$HERMES_PYTHON" -c "import importlib.metadata as m; print('\n'.join(sorted({f\"{d.metadata['Name'].lower()}=={d.version}\" for d in m.distributions()})))"
+          nproc; free -b; df -B1 /
+
       - name: Restore per-file duration cache
         # scripts/run_tests_parallel.py raises a file's timeout to
         # 3x its last healthy duration (_effective_file_timeout) so a
@@ -110,15 +136,21 @@ jobs:
         # No --files: the runner discovers the suite itself. The discovered
         # set is identical to the list the removed matrix job used to pass in.
         run: |
-          scripts/run_tests.sh
+          scripts/run_tests.sh $HERMES_TEST_PATHS
         env:
+          HERMES_TEST_PATHS: ${{ inputs.paths }}
           HERMES_TEST_SLICE: ${{ matrix.slice }}/2
-          HERMES_TEST_WORKERS: 32
+          HERMES_TEST_WORKERS: 4
           HERMES_TEST_FILE_TIMEOUT: 600
           # Ensure tests don't accidentally call real APIs
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""
           NOUS_API_KEY: ""
+
+      - name: Record runner usage after the tests
+        if: always()
+        run: |
+          uptime; free -b; df -B1 /
 
       - name: Save per-file duration cache (main only)
         # Only green first-attempt durations are written by the runner, so

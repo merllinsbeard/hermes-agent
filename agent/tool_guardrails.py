@@ -338,6 +338,16 @@ class ToolCallGuardrailController:
         self._turn_web_search_count = 0
         self._turn_subagent_count = 0
 
+    def forget_seen_results(self) -> None:
+        """A context boundary dropped earlier tool results, so a repeat of one is a reload.
+        Failure counts and loop caps stay: a failing call still fails, and a budget is spent either way."""
+        self._no_progress.clear()
+        self._identical_streak_sig = None
+        self._identical_streak_result_hash = ""
+        self._identical_streak_count = 0
+        self._identical_streak_first_call_id = ""
+        self._call_history.clear()
+
     @property
     def halt_decision(self) -> ToolGuardrailDecision | None:
         return self._halt_decision

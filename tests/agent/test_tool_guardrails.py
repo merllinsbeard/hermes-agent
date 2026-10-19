@@ -177,6 +177,39 @@ def test_skill_read_tools_are_idempotent_and_block_repeated_identical_success_ou
         assert blocked.code == "idempotent_no_progress_block"
 
 
+def test_context_boundary_lets_the_reload_a_pruned_skill_asks_for_run_without_forgetting_failures():
+    from types import SimpleNamespace
+
+    from agent.conversation_compression import _reset_read_dedup_caches
+
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig(
+            hard_stop_enabled=True,
+            no_progress_warn_after=2,
+            no_progress_block_after=2,
+            exact_failure_warn_after=2,
+            exact_failure_block_after=2,
+        )
+    )
+    view = {"name": "daily-context-archive", "file_path": "references/report.md"}
+    body = '{"success":true,"name":"daily-context-archive","content":"same"}'
+    failing = {"url": "https://example.invalid"}
+    for _ in range(2):
+        controller.after_call("skill_view", view, body, failed=False)
+        controller.after_call("web_extract", failing, '{"error":"unreachable"}', failed=True)
+    controller.observe_call("skill_view", view, body, failed=False)
+
+    _reset_read_dedup_caches("guard-boundary-task", agent=SimpleNamespace(_tool_guardrails=controller))
+
+    assert controller.before_call("skill_view", view).action == "allow"
+    controller.after_call("skill_view", view, body, failed=False)
+    controller.observe_call("skill_view", view, body, failed=False)
+    assert controller.halt_decision is None
+    controller.after_call("skill_view", view, body, failed=False)
+    assert controller.before_call("skill_view", view).code == "idempotent_no_progress_block"
+    assert controller.before_call("web_extract", failing).code == "repeated_exact_failure_block"
+
+
 def test_mutating_or_unknown_tools_are_not_blocked_for_repeated_identical_success_output_by_default():
     controller = ToolCallGuardrailController(
         ToolCallGuardrailConfig(no_progress_warn_after=2, no_progress_block_after=2)

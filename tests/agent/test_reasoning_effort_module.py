@@ -173,6 +173,27 @@ class TestCodexVocabulary:
         assert clamp_effort("max", supported) == "max"
         assert clamp_effort("ultra", supported) == "max"
 
+    @pytest.mark.parametrize(
+        "model",
+        ["gpt-6.1-terra", "openai/gpt-6.1-terra", "gpt-6.1-terra-2026-10-20"],
+    )
+    def test_terra_6_1_preserves_none_and_max(self, model):
+        """Terra accepts both wire levels, live-verified for #145360."""
+        from agent.reasoning_effort import codex_supported_efforts
+
+        supported = codex_supported_efforts(model)
+        assert clamp_effort("max", supported) == "max"
+        assert clamp_effort("none", supported) == "none"
+
+    def test_terra_6_1_does_not_inherit_sol_no_none_ladder(self):
+        from agent.reasoning_effort import codex_supported_efforts
+
+        sol_supported = codex_supported_efforts("gpt-6.1-sol")
+        terra_supported = codex_supported_efforts("gpt-6.1-terra")
+        assert clamp_effort("max", sol_supported) == "max"
+        assert clamp_effort("none", sol_supported) == "low"
+        assert clamp_effort("none", terra_supported) == "none"
+
 
 class TestRequestedEffort:
     def test_extracts_effort(self):

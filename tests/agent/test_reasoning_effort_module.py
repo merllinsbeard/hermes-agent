@@ -178,7 +178,6 @@ class TestCodexVocabulary:
         ["gpt-6.1-terra", "openai/gpt-6.1-terra", "gpt-6.1-terra-2026-10-20"],
     )
     def test_terra_6_1_preserves_none_and_max(self, model):
-        """Terra accepts both wire levels, live-verified for #145360."""
         from agent.reasoning_effort import codex_supported_efforts
 
         supported = codex_supported_efforts(model)

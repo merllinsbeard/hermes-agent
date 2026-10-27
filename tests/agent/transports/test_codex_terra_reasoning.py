@@ -1,5 +1,3 @@
-"""Regression tests for Terra reasoning effort on Codex routes (#145360)."""
-
 import pytest
 
 from agent.transports import get_transport
@@ -13,7 +11,6 @@ def transport():
 
 class TestTerraReasoning:
     def test_terra_6_1_max_effort_reaches_the_wire(self, transport):
-        """Regression for #145360, where Terra's max was clamped to xhigh."""
         kw = transport.build_kwargs(
             model="gpt-6.1-terra",
             messages=[{"role": "user", "content": "Route check"}],
@@ -26,7 +23,6 @@ class TestTerraReasoning:
         assert kw["reasoning"]["effort"] == "max"
 
     def test_terra_6_1_explicit_none_is_sent_verbatim(self, transport):
-        """Terra accepts explicit none, live-verified for #145360."""
         kw = transport.build_kwargs(
             model="gpt-6.1-terra",
             messages=[{"role": "user", "content": "Route check"}],

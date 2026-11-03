@@ -63,6 +63,7 @@ def test_real_temp_check_records_result_and_controls_stop_nudge(
     assert (build_verify_on_stop_nudge(session_id="real-check", changed_paths=[changed]) is None) == success
 
 
+@pytest.mark.platforms("posix")
 @pytest.mark.parametrize("case", [
     "unprefixed", "outside_temp", "repo_under_shared_temp", "cat", "masked_failure", "unattributed_pipeline", "canonical_suite",
 ])

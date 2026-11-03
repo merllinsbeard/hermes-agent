@@ -430,12 +430,19 @@ def _is_under(token: str, base: str | Path | None) -> bool:
 
 
 def _is_temp_script_path(token: str, root: str | Path | None) -> bool:
-    """An ad-hoc verify script: prefixed name, under the temp dir, outside the repo."""
+    """A prefixed temp verifier, including when the project contains the temp dir."""
     try:
         name = Path(token).expanduser().name
     except Exception:
         return False
-    return name.startswith(_AD_HOC_SCRIPT_NAME_PREFIXES) and _is_under(token, tempfile.gettempdir()) and not _is_under(token, root)
+    temp_dir = tempfile.gettempdir()
+    return (
+        name.startswith(_AD_HOC_SCRIPT_NAME_PREFIXES)
+        and _is_under(token, temp_dir)
+        # Hermes scratch can live inside a home-root workspace. Keep excluding repo
+        # scripts when the shared temp dir instead contains the project.
+        and (not _is_under(token, root) or _is_under(temp_dir, root))
+    )
 
 
 def _is_interpreter_token(token: str) -> bool:

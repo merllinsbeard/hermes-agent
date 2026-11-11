@@ -258,6 +258,34 @@ class TestGatewayPressureSweep:
 
         monkeypatch.setattr(acp, "read_anon_rss_mb", lambda: mb)
 
+    @pytest.mark.parametrize("method", ["pressure", "cap", "idle"])
+    def test_pending_turn_keeps_its_cached_agent(self, monkeypatch, method):
+        from gateway.run import _AGENT_PENDING_SENTINEL
+
+        bounds = AgentCacheBounds(memory_high_mb=1, max_evictions_per_pass=8,
+                                  protect_recent=0, max_size=1, idle_ttl_secs=1)
+        runner = self._runner(bounds)
+        self._at_rss(monkeypatch, 10)
+        runner._commit_then_release_soft = lambda agent, key: None
+        active, idle = self._cached_agent(), self._cached_agent()
+        active._last_activity_ts = idle._last_activity_ts = 1
+        key = "agent:security:local:dm:acp-session"
+        runner._agent_cache[key] = (active, "sig")
+        runner._agent_cache["idle"] = (idle, "sig")
+        runner._running_agents[key] = _AGENT_PENDING_SENTINEL
+
+        if method == "pressure":
+            runner._sweep_agent_cache_under_pressure()
+        elif method == "idle":
+            runner._sweep_idle_cached_agents()
+        else:
+            with runner._agent_cache_lock:
+                runner._enforce_agent_cache_cap()
+
+        assert key in runner._agent_cache
+        if method != "cap":
+            assert "idle" not in runner._agent_cache
+
     def test_no_eviction_below_budget(self, monkeypatch):
         runner = self._runner()
         self._at_rss(monkeypatch, 400)

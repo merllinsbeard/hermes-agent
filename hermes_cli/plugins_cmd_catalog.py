@@ -146,7 +146,10 @@ _HANDOFF_REPOS = {"github.com/nousresearch/hermes-plugin-holographic": "holograp
 
 def _adopt_handoff_install(plugin_dir: Path, record: dict) -> Optional[dict]:
     source = str(record.get("source") or "").split("#", 1)[0]
-    entry = get_live_catalog_entry(_HANDOFF_REPOS.get(_normalize_repo(source), ""))
+    name = _HANDOFF_REPOS.get(_normalize_repo(source))
+    if name is None:
+        return None
+    entry = get_live_catalog_entry(name)
     if entry is None:
         return None
     sha = str(record.get("revision") or "").lower()

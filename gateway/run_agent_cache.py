@@ -1029,15 +1029,17 @@ class GatewayAgentCacheMixin:
         rss_mb = read_anon_rss_mb()
         if rss_mb is None or rss_mb < bounds.memory_high_mb:
             return 0
-        running_ids = self._running_agent_ids()
-
-        def _is_live(agent: Any) -> bool:
-            return agent is not None and agent is not _AGENT_PENDING_SENTINEL and id(agent) not in running_ids
-
-        def _is_evictable(key: str, agent: Any) -> bool:
-            return _is_live(agent) and transcript_persistence_caught_up(agent)
-
         with _lock:
+            running = self._running_agent_items()
+            running_keys = {key for key, _ in running}
+            running_ids = {id(agent) for _, agent in running if agent is not _AGENT_PENDING_SENTINEL}
+
+            def _is_live(agent: Any) -> bool:
+                return agent is not None and agent is not _AGENT_PENDING_SENTINEL and id(agent) not in running_ids
+
+            def _is_evictable(key: str, agent: Any) -> bool:
+                return key not in running_keys and _is_live(agent) and transcript_persistence_caught_up(agent)
+
             ordered = [(key, _first_agent(entry)) for key, entry in _cache.items()]
             plan = plan_pressure_evictions(
                 ordered, is_evictable=_is_evictable, max_evictions=bounds.max_evictions_per_pass,
@@ -1046,8 +1048,8 @@ class GatewayAgentCacheMixin:
             for key, _ in plan:
                 _cache.pop(key, None)
         if not plan:
-            _mid_turn = sum(1 for _, a in ordered if a is not None and id(a) in running_ids)
-            _unflushed = sum(1 for _, a in ordered if _is_live(a) and not transcript_persistence_caught_up(a))
+            _mid_turn = sum(1 for key, a in ordered if key in running_keys or (a is not None and id(a) in running_ids))
+            _unflushed = sum(1 for key, a in ordered if key not in running_keys and _is_live(a) and not transcript_persistence_caught_up(a))
             logger.warning(
                 "Agent cache pressure: anon RSS %dMB over budget %dMB but no "
                 "evictable session (%d cached, %d mid-turn, %d blocked on "
@@ -1104,13 +1106,16 @@ class GatewayAgentCacheMixin:
             return
         # Snapshot of agent instances mid-turn, keyed by id() so lookup is O(1) and independent of
         # AIAgent.__eq__ (which MagicMock overrides in tests).
-        running_ids = self._running_agent_ids()
+        running = self._running_agent_items()
+        running_keys = {key for key, _ in running}
+        running_ids = {id(agent) for _, agent in running}
         # Walk LRU → MRU; only the first (size - cap) LRU positions are candidates. An active slot is
         # SKIPPED rather than evicting a newer entry — that would penalise a fresh session (no cache
         # history) to protect a long-running one. Cache may stay over cap until the next insert.
         cap = self._agent_cache_cap()
         candidates = [(key, _tuple_agent(_cache.get(key))) for key in list(_cache.keys())[:max(0, len(_cache) - cap)]]
-        evict_plan = [(key, agent) for key, agent in candidates if agent is None or id(agent) not in running_ids]
+        evict_plan = [(key, agent) for key, agent in candidates
+                      if key not in running_keys and (agent is None or id(agent) not in running_ids)]
         for key, _ in evict_plan:
             _cache.pop(key, None)
         remaining_over_cap = len(_cache) - cap
@@ -1138,11 +1143,13 @@ class GatewayAgentCacheMixin:
         now = time.time()
         idle_ttl = self._agent_cache_idle_ttl()
         to_evict: list[tuple] = []
-        running_ids = self._running_agent_ids()
         with _lock:
+            running = self._running_agent_items()
+            running_keys = {key for key, _ in running}
+            running_ids = {id(agent) for _, agent in running}
             for key, entry in list(_cache.items()):
                 agent = _tuple_agent(entry)
-                if agent is None or id(agent) in running_ids:
+                if key in running_keys or agent is None or id(agent) in running_ids:
                     continue  # mid-turn — don't tear it down
                 last_activity = getattr(agent, "_last_activity_ts", None)
                 if last_activity is None or (now - last_activity) <= idle_ttl:

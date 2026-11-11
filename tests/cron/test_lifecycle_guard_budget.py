@@ -72,6 +72,17 @@ def test_lifecycle_scan_root_within_budget_is_not_a_verdict(monkeypatch):
 # --- referenced-script walk ------------------------------------------------
 
 
+def test_large_multiline_cli_is_scanned_and_lifecycle_is_still_blocked(tmp_path):
+    script = tmp_path / "cli.js"
+    script.write_text("// benign line\n" * 17500, encoding="utf-8")
+    command = shlex.quote(str(script)) + " thread list --json"
+
+    assert lifecycle_guard.scan_gateway_lifecycle(command) == (False, None)
+
+    script.write_text(script.read_text(encoding="utf-8") + "systemctl restart hermes-gateway\n", encoding="utf-8")
+    assert lifecycle_guard.scan_gateway_lifecycle(command) == (True, None)
+
+
 def test_unique_path_budget_bounds_reads_and_fails_closed(monkeypatch, tmp_path):
     monkeypatch.setattr(lifecycle_guard, "_MAX_LIFECYCLE_SCAN_PATHS", 2)
     for i in range(3):
